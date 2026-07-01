@@ -27,8 +27,8 @@ export const COST = {
   /** Safety cap on total results shown when NO count is requested (perf, not relevance). */
   MAX_TOTAL_SHOWN: 120,
 
-  /** Master switch for the repeat-query cache. OFF while tuning so the same JD re-runs fresh. */
-  CACHE_ENABLED: false,
+  /** Repeat-query cache. ON by default (prod). To disable locally while tuning, set SEARCH_CACHE=off. */
+  CACHE_ENABLED: process.env.SEARCH_CACHE !== "off",
 
   /** Repeat-query cache lifetime (short, so daily-new profiles surface fast). */
   CACHE_TTL_MS: 1000 * 60 * 10,

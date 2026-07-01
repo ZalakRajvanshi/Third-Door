@@ -39,7 +39,9 @@ async function embedBatch(texts: string[]): Promise<number[][]> {
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;
   const key = new URL(req.url).searchParams.get("key");
-  if (secret && key !== secret) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const auth = req.headers.get("authorization"); // Vercel Cron sends "Bearer <CRON_SECRET>"
+  const authorized = !secret || key === secret || auth === `Bearer ${secret}`;
+  if (!authorized) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (!URL_ || !KEY || !EMBED_KEY) return NextResponse.json({ error: "not configured" }, { status: 500 });
 
   const cap = Math.min(500, Number(new URL(req.url).searchParams.get("limit")) || 200);
