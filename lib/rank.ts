@@ -75,12 +75,18 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
     });
 
     // Spell out exactly what the recruiter asked for, so the model scores against it.
+    // The distilled JD — the intent engine already stripped boilerplate into these fields.
+    // Sending THIS (≈120 tokens) beats both the lossy 6-token label AND the raw JD (thousands
+    // of tokens of company blurb/perks): sharper signal, lower cost.
     const want = [
-      q.roleFamilies.length ? `role: ${q.roleFamilies.join("/")}` : null,
+      q.roles.length ? `title: ${q.roles.join(" / ")}` : null,
+      q.roleFamilies.length ? `function: ${q.roleFamilies.join("/")}` : null,
+      q.seniority.length ? `seniority: ${q.seniority.join("/")}` : null,
       q.yoeMin != null ? `${q.yoeMin}+ years experience` : null,
       q.yoeMax != null ? `at most ${q.yoeMax} years` : null,
       q.companyTier.length ? `pedigree: ${q.companyTier.join("/")} (Tier-1)` : null,
       q.domains.length ? `domain: ${q.domains.join("/")}` : null,
+      q.skills.length ? `skills: ${q.skills.join(", ")}` : null,
       q.compMinLpa || q.compMaxLpa ? `comp ${q.compMinLpa ?? "?"}–${q.compMaxLpa ?? "?"} LPA` : null,
       q.india ? "based in India" : null,
       q.signals.length ? `signals: ${q.signals.join(", ")}` : null,
@@ -123,7 +129,7 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
           role: "user",
           content:
             `Hiring brief: "${q.raw}"\n` +
-            (want ? `Must-haves: ${want}\n` : "") +
+            (want ? `Role spec (distilled from the JD — score against THIS): ${want}\n` : "") +
             (q.mustHave?.length ? `Hard requirements: ${q.mustHave.join(", ")}\n` : "") +
             (q.niceToHave?.length ? `Nice-to-have (bonus only): ${q.niceToHave.join(", ")}\n` : "") +
             (learnings.length ? `\nKNOWN HIRING PATTERNS for this exact role (from past interviews — APPLY these):\n${learnings.map((l) => `• ${l}`).join("\n")}\n` : "") +

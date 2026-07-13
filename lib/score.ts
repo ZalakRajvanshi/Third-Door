@@ -38,8 +38,10 @@ function roleScore(p: Person, q: StructuredQuery): number {
   const roleTerms = [...q.roles, ...q.keywords].map(lc).filter((t) => t.length > 2);
   const hits = roleTerms.filter((t) => hay.includes(t)).length;
   let s = roleTerms.length ? hits / roleTerms.length : 0.4;
-  // role-family alignment (DB enum) is strong evidence
-  if (q.roleFamilies.length && q.roleFamilies.some((f) => fam.includes(lc(f)) || hay.includes(lc(f).replace(/_/g, " ")))) s = Math.max(s, 0.85);
+  // role-family alignment (DB enum) is necessary but NOT sufficient — it floors the score at
+  // 0.7, but a genuine title/keyword match (hits above) is what earns the top of the range.
+  // Otherwise every PM scores identically on a PM search and the heaviest weight stops discriminating.
+  if (q.roleFamilies.length && q.roleFamilies.some((f) => fam.includes(lc(f)) || hay.includes(lc(f).replace(/_/g, " ")))) s = Math.max(s, 0.7);
   // seniority alignment
   if (q.seniority.length && q.seniority.some((sv) => hay.includes(lc(sv)))) s = Math.min(1, s + 0.1);
   return Math.max(0, Math.min(1, s));

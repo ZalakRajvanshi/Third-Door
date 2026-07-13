@@ -90,6 +90,9 @@ function normalize(s: SrcCfg, r: any): Person {
     _sources: [{ adapter: `supabase:${s.label}`, raw_id: String(slug ?? ""), trust: s.label === "binary" ? 1 : 0.85 }],
     dossier: {
       years: yoe ?? null, seniority: (m as any).sen ? r[(m as any).sen] : null,
+      // role family/text so scoring can match on function (binary/yc → role_family enum;
+      // luma/ext/apify → title_role/inferred_role). Was never set → role-family scoring no-op'd.
+      roleFamily: (m.roleFamily && r[m.roleFamily]) || (m.roleText && r[m.roleText]) || null,
       overview: summary, tagline: (m.one && r[m.one]) || null,
       bestFor: [], notFor: [], products: [], roles: [], scale: null,
       skills: skills.slice(0, 16), tools: [], domains,
@@ -108,7 +111,9 @@ async function runSource(client: any, s: SrcCfg, query: StructuredQuery, terms: 
     let qb = client.from(s.table).select("id," + s.sel);
     if (useFamily) qb = qb.in(m.roleFamily!, query.roleFamilies);
     if (m.india && query.india) qb = qb.eq(m.india, true);
-    if (m.yoe && query.yoeMin != null) qb = qb.gte(m.yoe, query.yoeMin);
+    // soft floor: allow a 2-year stretch below the ask so a strong near-miss surfaces
+    // (scored down in businessScore), instead of being hard-dropped by the DB.
+    if (m.yoe && query.yoeMin != null) qb = qb.gte(m.yoe, Math.max(0, query.yoeMin - 2));
     if (m.yoe && query.yoeMax != null) qb = qb.lte(m.yoe, query.yoeMax);
     if (m.city && query.locations[0]) {
       // match every spelling of the city (Bangalore ⇒ bengaluru) or matches silently vanish
@@ -130,7 +135,12 @@ async function runSource(client: any, s: SrcCfg, query: StructuredQuery, terms: 
   try {
     // text tables (no role_family) NEED the keyword filter; family tables relax it if too few.
     let { data, error } = await build(true);
-    if (!error && useFamily && (data?.length ?? 0) < 6) { const r = await build(false); if (!r.error) data = r.data; }
+    // Fallback WITHOUT terms orders by yoe-desc = "the most experienced humans", unrelated to the
+    // JD. Only acceptable when semantic is OFF (keyword is all we have). When semantic is ON, the
+    // vector lane carries recall for thin-keyword JDs — so skip this noise entirely.
+    if (!error && useFamily && (data?.length ?? 0) < 6 && !COST.SEARCH_SEMANTIC) {
+      const r = await build(false); if (!r.error) data = r.data;
+    }
     if (error) { console.error(`[src ${s.label}] ${error.message.slice(0, 90)}`); return []; }
     return (data ?? []).map((r: any) => normalize(s, r));
   } catch (e) { console.error(`[src ${s.label}]`, e); return []; }
@@ -173,13 +183,17 @@ async function vectorLane(client: any, query: StructuredQuery): Promise<Person[]
       if (!v) return [];
       const simBySlug = new Map<string, number>();
       await Promise.all(vecs.map(async (qvec, vi) => {
+        // primary = the JD itself (trust it more); persona bets are speculative → higher floor
+        const floor = vi === 0 ? COST.VECTOR_MIN_SIM : COST.VECTOR_MIN_SIM + 0.06;
+        // relax the DB min_years pre-filter by 2 — near-misses should surface (scored down), not vanish
         const params: Record<string, unknown> = { query_embedding: qvec, match_count: vi === 0 ? COST.VECTOR_MATCH_COUNT : 20 };
-        if (v.filt) { params.only_india = !!query.india; if (query.yoeMin != null) params.min_years = query.yoeMin; }
+        if (v.filt) { params.only_india = !!query.india; if (query.yoeMin != null) params.min_years = Math.max(0, query.yoeMin - 2); }
         try {
           const { data, error } = await client.rpc(v.fn, params);
           if (error) return; // RPC not installed → keyword path covers it
           for (const r of ((data ?? []) as Array<{ linkedin_slug: string; similarity: number }>)) {
             const sim = Number(r.similarity) || 0;
+            if (sim < floor) continue; // below the floor = noise, drop it
             if (sim > (simBySlug.get(r.linkedin_slug) ?? 0)) simBySlug.set(r.linkedin_slug, sim);
           }
         } catch { /* ignore this angle */ }

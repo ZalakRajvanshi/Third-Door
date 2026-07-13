@@ -201,9 +201,10 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
   const cached = await cacheGet<SearchResult>(key);
   if (cached) { emit({ type: "final", results: cached.results, query: cached.query, meta: { ...cached.meta, cached: true } }); return; }
 
-  await Promise.all([ensureCompanies(), ensurePreferences(), ensureLearnings()]); // context + prefs + notes before scoring
-
   // ── PRELIMINARY: instant heuristic intent → keyword retrieve → business score ──
+  // Emit this FIRST — don't wait on the heavy company/prefs/learnings loads (that's what
+  // made the preview slow on cold serverless). Preview uses hardcoded tier fallback; the
+  // final pass below loads the full context.
   try {
     const hq = heuristicQuery(intentText);
     hq.embedText = embedText; // preview runs semantic too, so relevant people show from the start
@@ -211,6 +212,8 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
     const top = preRank(prelimPeople, hq).slice(0, 16).map((p) => quickRank(p, hq));
     if (top.length) emit({ type: "preliminary", results: top, query: { ...hq, raw: displayBrief } });
   } catch (e) { console.error("[progressive] preview failed:", e); }
+
+  await Promise.all([ensureCompanies(), ensurePreferences(), ensureLearnings()]); // full context for the final
 
   // ── FINAL: real intent → retrieve(+semantic) → AI rank ──
   try {

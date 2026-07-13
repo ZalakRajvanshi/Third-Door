@@ -13,16 +13,18 @@ export const COST = {
   /** If the DB yields at least this many strong matches, SKIP Apify entirely. */
   MIN_STRONG_RESULTS: 8,
 
-  /** How many candidates we send to the AI ranker. Wider = fewer good matches missed in a
-   *  big dataset (relevance > shaving tokens). gpt-4o-mini stays well under a cent at this size. */
-  MAX_RANK_CANDIDATES: 40,
+  /** How many candidates we send to the AI ranker. With clean retrieval (similarity floor +
+   *  real filters) 30 STRONG candidates beat 40 noisy ones — better output AND lower token cost.
+   *  gpt-4o-mini stays well under a cent at this size. */
+  MAX_RANK_CANDIDATES: 30,
 
   /** HARD relevance floor for the AI-vetted top tier: drop anything below this. */
   MIN_SHOW_SCORE: 65,
 
   /** Relevance floor for the "more relevant" tail (cheap business-scored, not AI-vetted).
-   *  Lower than the AI floor so we surface depth, but high enough to stay relevant — never junk. */
-  TAIL_MIN_SCORE: 52,
+   *  Set ABOVE the ~53 "matched-nothing" baseline so the tail requires real skill/domain
+   *  overlap — not just being in the right role family. Lower than the AI floor to show depth. */
+  TAIL_MIN_SCORE: 62,
 
   /** Safety cap on total results shown when NO count is requested (perf, not relevance). */
   MAX_TOTAL_SHOWN: 120,
@@ -42,6 +44,11 @@ export const COST = {
 
   /** How many vector matches to pull per pool in the semantic lane. */
   VECTOR_MATCH_COUNT: 40,
+
+  /** Cosine-similarity floor for the semantic lane. Below this, a "match" is noise — the
+   *  vector function always returns match_count rows however unrelated, so without a floor
+   *  ~200 off-target people flood every search. Persona bets use a slightly higher floor. */
+  VECTOR_MIN_SIM: 0.32,
 
   // ── Apify cost cap (Apify is DORMANT until APIFY_TOKEN + APIFY_ACTOR_ID are set) ──
   /** Hard ceiling on Apify spend per search, in USD. */

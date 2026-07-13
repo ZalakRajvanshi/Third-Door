@@ -6,6 +6,7 @@ import { runSearchProgressive } from "@/lib/search";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // the AI final pass can take a while (Pro plan allows up to 300s)
 
 export async function POST(req: NextRequest) {
   const { q, jd, note } = await req.json().catch(() => ({}));
