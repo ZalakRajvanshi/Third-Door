@@ -134,6 +134,33 @@ export function businessScore(p: Person, q: StructuredQuery): ScoreBreakdown {
   return { total: Math.max(0, Math.min(100, total)), ...parts };
 }
 
+// Function/role-family cues per family. Deliberately LENIENT — a "Growth Product Manager"
+// hits both marketing (growth) and product_management (product manager), so cross-function
+// people are never mistaken for off-function. Used only to ORDER the cheap tail, never to drop.
+const FAMILY_CUES: Record<string, RegExp> = {
+  product_management: /\b(product manager|product management|pm|apm|group product|cpo|head of product|product owner|product lead)\b/,
+  engineering: /\b(engineer|developer|swe|sde|software|backend|frontend|full[- ]?stack|architect|tech lead|devops)\b/,
+  design: /\b(design|designer|ux|ui|user experience|visual|interaction|graphic)\b/,
+  analytics: /\b(analyst|analytics|data scientist|data science|bi|business intelligence|data engineer)\b/,
+  marketing: /\b(marketing|growth|brand|content|seo|sem|demand gen|performance marketing|social media|community)\b/,
+  category: /\b(category|merchandis|buying|sourcing|assortment)\b/,
+};
+
+/** Does this person plausibly belong to a requested function? Lenient by design: matches on the
+ *  structured role-family enum (binary/yc) OR title/headline cues, so a genuine cross-function
+ *  candidate always passes. Returns true when no function was requested. */
+export function matchesFunction(p: Person, q: StructuredQuery): boolean {
+  if (!q.roleFamilies.length) return true;
+  const d = dossier(p);
+  const fam = lc(d.roleFamily);
+  const hay = `${lc(p.current_title)} ${lc(p.headline)} ${fam} ${lc(d.tagline)}`;
+  return q.roleFamilies.some((f) => {
+    if (fam && fam.includes(lc(f))) return true; // structured enum match (binary/yc)
+    const cue = FAMILY_CUES[f];
+    return cue ? cue.test(hay) : hay.includes(lc(f).replace(/_/g, " "));
+  });
+}
+
 /** Rank the retrieved pool by business score, return the strongest first (for the AI cut). */
 export function preRank(people: Person[], q: StructuredQuery): Person[] {
   return people

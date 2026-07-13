@@ -3,7 +3,7 @@ import { supabaseAdapter } from "@/lib/sources/supabase";
 import { apifyAdapter, hasApify } from "@/lib/sources/apify";
 import { parseIntent, heuristicQuery } from "@/lib/intent";
 import { rankPeople } from "@/lib/rank";
-import { preRank, businessScore } from "@/lib/score";
+import { preRank, businessScore, matchesFunction } from "@/lib/score";
 import { ensureCompanies } from "@/lib/companies";
 import { ensurePreferences } from "@/lib/learning";
 import { ensureLearnings } from "@/lib/learnings";
@@ -55,11 +55,17 @@ function trim(ranked: RankedPerson[]): RankedPerson[] {
 function assemble(preRanked: Person[], aiRanked: RankedPerson[], q: StructuredQuery): RankedPerson[] {
   const vetted = trim(aiRanked).map((r) => ({ ...r, vetted: true }));
   const seenByAi = new Set(aiRanked.map((r) => r.person.id)); // everyone the AI scored (incl. trimmed)
-  const tail = preRanked
+  const tailAll = preRanked
     .filter((p) => !seenByAi.has(p.id))
     .map((p) => ({ ...quickRank(p, q), vetted: false }))
     .filter((r) => r.score >= COST.TAIL_MIN_SCORE);
-  const all = [...vetted, ...tail];
+  // SOFT function gate: the cheap tail can't tell a PM from a designer (the AI ranker does that,
+  // but only for the vetted tier). So put same-function people first and let off-function ones
+  // backfill only if needed — wrong-function noise falls off the bottom when there's enough
+  // right-function depth, while niche searches keep their tail. Never drops cross-function people.
+  const onFn = q.roleFamilies.length ? tailAll.filter((r) => matchesFunction(r.person, q)) : tailAll;
+  const offFn = q.roleFamilies.length ? tailAll.filter((r) => !matchesFunction(r.person, q)) : [];
+  const all = [...vetted, ...onFn, ...offFn];
   const limit = q.wantCount && q.wantCount > 0 ? q.wantCount : COST.MAX_TOTAL_SHOWN;
   return all.slice(0, limit);
 }
@@ -209,7 +215,13 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
     const hq = heuristicQuery(intentText);
     hq.embedText = embedText; // preview runs semantic too, so relevant people show from the start
     const prelimPeople = dedupe(await supabaseAdapter.search(hq));
-    const top = preRank(prelimPeople, hq).slice(0, 16).map((p) => quickRank(p, hq));
+    const preRanked = preRank(prelimPeople, hq);
+    // same soft function-ordering as the final, so the preview doesn't flash an off-function
+    // person and then swap them out (right-function first, off-function backfills)
+    const ordered = hq.roleFamilies.length
+      ? [...preRanked.filter((p) => matchesFunction(p, hq)), ...preRanked.filter((p) => !matchesFunction(p, hq))]
+      : preRanked;
+    const top = ordered.slice(0, 16).map((p) => quickRank(p, hq));
     if (top.length) emit({ type: "preliminary", results: top, query: { ...hq, raw: displayBrief } });
   } catch (e) { console.error("[progressive] preview failed:", e); }
 
