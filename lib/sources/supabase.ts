@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import type { Person, SourceAdapter, StructuredQuery } from "@/lib/types";
+import type { Evidence, Person, SourceAdapter, StructuredQuery } from "@/lib/types";
 import { expandTerms, meetsTier, cityVariants } from "@/lib/knowledge";
 import { embedMany, hasEmbeddings } from "@/lib/ai";
 import { COST } from "@/lib/config";
@@ -319,6 +319,106 @@ async function attachFacets(client: any, people: Person[]): Promise<void> {
         if (f.inferred_ctc_band && !flags.some((x) => /lpa/i.test(x))) flags.push(String(f.inferred_ctc_band));
       }
     } catch { /* facets optional — ignore */ }
+  }));
+}
+
+// ── Evidence ("show the receipt") ────────────────────────────────────────────
+// We already search the full résumé / career text — so we can PROVE why someone matched
+// instead of asking the recruiter to trust a score. Fetches the big text column for the
+// SHOWN people only, cuts a ~150-char quote around the best-matching term, and discards the
+// rest — the multi-KB blob never leaves this layer. No LLM, so this is also the only
+// reasoning the cheap tail (most of the list) has ever had.
+
+/** Cut a readable quote around the most specific matching term. Longest term first — "a/b
+ *  testing" is better evidence than "product". Trims to word boundaries so it reads cleanly. */
+// luma/yc searchable_text opens with "<name> <designation> <company> …" and a résumé opens with
+// a header block. A hit in there just echoes the result card back; the proof lives further in.
+const HEADER_CHARS = 140;
+
+function cut(text: string, at: number, t: string): Evidence | null {
+  const start = Math.max(0, at - 70);
+  const end = Math.min(text.length, at + t.length + 90);
+  let s = text.slice(start, end).replace(/\s+/g, " ").trim();
+  if (start > 0) s = "…" + s.replace(/^\S*\s/, ""); // drop the half-word we cut into
+  if (end < text.length) s = s.replace(/\s\S*$/, "") + "…";
+  return s.length < t.length + 8 ? null : { text: s, term: t }; // too thin to be worth showing
+}
+
+/**
+ * How useful is this quote to a recruiter? The enriched text isn't uniform prose — it ends in a
+ * machine-generated tag blob ("bengaluru fintech payments ecommerce b2c senior product_management
+ * analytics-bi"). That contains the keywords but reads as noise, so a naive first-match quotes
+ * garbage. Reward real sentences and hard numbers; punish the tag soup.
+ */
+function quality(s: string): number {
+  let q = 0;
+  if (/\d+\s*(%|x\b|cr\b|mn\b|k\b|bps\b)/i.test(s)) q += 4; // "cut failures 40%", "10,000+ Cr TPV" — gold
+  if (/\b(owned|led|built|launched|drove|scaled|shipped|grew|reduced|improved|delivered)\b/i.test(s)) q += 3; // achievement verbs
+  if (/[.;]/.test(s)) q += 1; // sentence punctuation → prose, not a list
+  q -= Math.min(5, (s.match(/\w_\w/g) ?? []).length); // snake_case tokens = tag blob
+  if (/\b(\w{3,})\s+\1\b/i.test(s)) q -= 2; // "wallets wallets" — dedup artefacts of the tag blob
+  if (/\|\s*[\w\s.&-]+\|\s*\w{3}\s+\d{4}/i.test(s)) q -= 3; // "| business analyst | jul 2016 |" — raw career row
+  return q;
+}
+
+/** A quote must actually READ like proof. Below this we show nothing: for some profiles the only
+ *  match sits in the tag blob, and a garbled receipt is worse for trust than no receipt at all. */
+const MIN_EVIDENCE_QUALITY = 1;
+
+function snippet(text: string, terms: string[]): Evidence | null {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  let best: Evidence | null = null, bestScore = -Infinity, bestRaw = -Infinity;
+  // Terms arrive most-specific-first (skills before domains); a small order bonus keeps that
+  // preference without letting it override a genuinely better quote.
+  terms.forEach((t, rank) => {
+    const bonus = Math.max(0, 3 - rank * 0.2);
+    let at = lower.indexOf(t), seen = 0;
+    while (at !== -1 && seen < 3) {
+      // header hits just echo the result card ("<name> <title> <company>") — skip them
+      if (at >= HEADER_CHARS) {
+        const ev = cut(text, at, t);
+        if (ev) {
+          const raw = quality(ev.text);
+          if (raw + bonus > bestScore) { best = ev; bestScore = raw + bonus; bestRaw = raw; }
+        }
+        seen++;
+      }
+      at = lower.indexOf(t, at + 1);
+    }
+  });
+  // No fallback to a header/low-quality match on purpose — showing nothing beats showing noise.
+  return bestRaw >= MIN_EVIDENCE_QUALITY ? best : null;
+}
+
+/** Attach a verbatim quote to each person that has a full-text column. Batched per pool.
+ *  Evidence is a bonus: any failure here must never break or slow the search meaningfully. */
+export async function attachEvidence(people: Person[], terms: string[]): Promise<void> {
+  if (!hasSupabase || !people.length) return;
+  const clean = Array.from(new Set(terms.map((t) => t.toLowerCase().trim()).filter((t) => t.length > 2)));
+  if (!clean.length) return;
+  const client = db();
+  const bySrc = new Map<string, Person[]>();
+  for (const p of people) {
+    const cfg = SOURCES.find((s) => s.label === (p as any)._src);
+    if (!cfg?.m.full) continue; // ext/apify have no full-text blob
+    if (!bySrc.has(cfg.label)) bySrc.set(cfg.label, []);
+    bySrc.get(cfg.label)!.push(p);
+  }
+  await Promise.all(Array.from(bySrc.entries()).map(async ([label, ppl]) => {
+    const s = SOURCES.find((x) => x.label === label)!;
+    const bySlug = new Map(ppl.map((p) => [p.id.split(":").slice(1).join(":"), p]));
+    const slugs = Array.from(bySlug.keys()).filter(Boolean);
+    if (!slugs.length) return;
+    try {
+      const { data, error } = await client.from(s.table).select(`${s.m.slug},${s.m.full}`).in(s.m.slug, slugs);
+      if (error || !data) return;
+      for (const r of data as any[]) {
+        const p = bySlug.get(String(r[s.m.slug]));
+        const ev = p && snippet(String(r[s.m.full!] ?? ""), clean);
+        if (p && ev) p.evidence = ev;
+      }
+    } catch { /* optional — never fail the search over evidence */ }
   }));
 }
 

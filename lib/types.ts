@@ -67,6 +67,16 @@ export interface Person {
   last_updated: string; // ISO
   _sources: SourceRef[]; // internal only
   dossier?: Dossier; // structured detail for the UI + scoring
+  /** THE RECEIPT: the actual line from this person's résumé / career text that matched the
+   *  brief. We already search the full text, so proving the match costs nothing extra and the
+   *  recruiter can verify a candidate in two seconds instead of trusting a score. */
+  evidence?: Evidence;
+}
+
+/** A verbatim quote from the source text, with the term that matched it. */
+export interface Evidence {
+  text: string; // the quoted snippet, trimmed to word boundaries, with ellipses
+  term: string; // which brief term matched (so the UI can highlight it)
 }
 
 /** Parsed intent + search strategies produced by the Intent Engine (v2). */

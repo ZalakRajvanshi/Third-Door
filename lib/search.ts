@@ -1,5 +1,5 @@
 import type { Person, RankedPerson, StructuredQuery } from "@/lib/types";
-import { supabaseAdapter } from "@/lib/sources/supabase";
+import { supabaseAdapter, attachEvidence } from "@/lib/sources/supabase";
 import { apifyAdapter, hasApify } from "@/lib/sources/apify";
 import { parseIntent, heuristicQuery, extractCount } from "@/lib/intent";
 import { rankPeople } from "@/lib/rank";
@@ -88,6 +88,17 @@ function shapeInput(input: string | SearchInput) {
 
 const prettyFamily = (f: string) => f.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+/** The brief's concrete concepts — what a quote should PROVE.
+ *  Deliberately excludes roles/keywords: quoting the job title back is tautological
+ *  ("this Senior PM matches because they're a Senior PM") and the title is already shown
+ *  next to the name. Only skills, domains, named companies and hard requirements are
+ *  evidence a recruiter can't get from the result card. */
+function evidenceTerms(q: StructuredQuery): string[] {
+  return [...q.skills, ...q.domains, ...q.companies, ...q.mustHave]
+    .map((t) => t.toLowerCase().trim())
+    .filter((t) => t.length > 2 && !/^(product|manager|senior|lead|design|engineer)$/.test(t));
+}
+
 /** A clean role summary from the parsed JD — used as the brief for ranking AND the UI
  *  label. For a JD this beats the raw first line ("About the role…"). */
 function synthBrief(q: StructuredQuery, note: string, fallback: string): string {
@@ -167,9 +178,12 @@ export async function runSearch(input: string | SearchInput): Promise<SearchResu
       }
     }
 
+    const shown = assemble(preRanked, ranked, query);
+    // prove it: attach the résumé line that actually matched (one batched query, no LLM)
+    await attachEvidence(shown.map((r) => r.person), evidenceTerms(query));
     const result: SearchResult = {
       query,
-      results: assemble(preRanked, ranked, query),
+      results: shown,
       meta: { found: totalFound, afterDedupe: dedupeCount, usedApify, cached: false },
     };
 
@@ -254,7 +268,9 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
       }
     }
 
-    const result: SearchResult = { query, results: assemble(preRanked, ranked, query), meta: { found: totalFound, afterDedupe: dedupeCount, usedApify, cached: false } };
+    const shown = assemble(preRanked, ranked, query);
+    await attachEvidence(shown.map((r) => r.person), evidenceTerms(query)); // the receipt
+    const result: SearchResult = { query, results: shown, meta: { found: totalFound, afterDedupe: dedupeCount, usedApify, cached: false } };
     emit({ type: "final", results: result.results, query: result.query, meta: result.meta });
     await cacheSet(key, result);
   } catch (e) {

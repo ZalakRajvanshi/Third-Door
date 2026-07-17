@@ -56,7 +56,7 @@ function heuristicRank(person: Person, q: StructuredQuery): RankedPerson {
 
 export async function rankPeople(people: Person[], q: StructuredQuery): Promise<RankedPerson[]> {
   if (!hasLLM || people.length === 0) {
-    return people.map((p) => heuristicRank(p, q)).sort((a, b) => b.score - a.score);
+    return people.map((p) => heuristicRank(p, q)).sort((a, b) => b.score - a.score || a.person.id.localeCompare(b.person.id));
   }
 
   try {
@@ -191,9 +191,9 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
     // array — so they were excluded from the tail too, and disappeared from the search entirely.
     // These are the TOP business-scored people in the pool; a truncated LLM response silently
     // deleted them. Leaving them out of `ranked` lets assemble() score them into the tail instead.
-    return ranked.sort((a, b) => b.score - a.score);
+    return ranked.sort((a, b) => b.score - a.score || a.person.id.localeCompare(b.person.id)); // deterministic ties
   } catch (e) {
     console.error("[rank] LLM failed, using heuristic:", e);
-    return people.map((p) => heuristicRank(p, q)).sort((a, b) => b.score - a.score);
+    return people.map((p) => heuristicRank(p, q)).sort((a, b) => b.score - a.score || a.person.id.localeCompare(b.person.id));
   }
 }

@@ -6,10 +6,32 @@ import { ArrowRight, SlidersHorizontal, ChevronLeft, FileText, Upload, Loader2 }
 import { MatchMeter } from "@/components/MatchMeter";
 import { CandidateDetail } from "@/components/CandidateDetail";
 import { cacheResults, logFeedback, readPendingSearch, setPendingSearch, type PendingSearch } from "@/lib/store";
-import type { RankedPerson } from "@/lib/types";
+import type { Evidence, RankedPerson } from "@/lib/types";
 
 function initials(name: string) { return name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase(); }
 const prettyRole = (f: string) => f.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** THE RECEIPT — a verbatim line from the candidate's own résumé proving they match, with the
+ *  matched term highlighted. Every claim is traceable to their document, so a recruiter can
+ *  verify in two seconds rather than trusting a score. */
+function Receipt({ ev }: { ev: Evidence }) {
+  // split on the matched term so we can emphasise it without dangerouslySetInnerHTML
+  const i = ev.text.toLowerCase().indexOf(ev.term.toLowerCase());
+  const parts = i === -1
+    ? [ev.text]
+    : [ev.text.slice(0, i), ev.text.slice(i, i + ev.term.length), ev.text.slice(i + ev.term.length)];
+  return (
+    <p className="mt-2 border-l-2 pl-2.5 text-[11.5px] italic leading-relaxed" style={{ borderColor: "var(--line-2)", color: "var(--muted)" }}>
+      {parts.length === 1 ? parts[0] : (
+        <>
+          {parts[0]}
+          <mark className="not-italic font-medium" style={{ background: "transparent", color: "var(--accent-2)" }}>{parts[1]}</mark>
+          {parts[2]}
+        </>
+      )}
+    </p>
+  );
+}
 
 // Build the "here's what we understood" chips from the parsed query.
 function understanding(q: any): string[] {
@@ -215,13 +237,18 @@ function SearchInner() {
                   return (
                     <div key={r.person.id}>
                       {firstTail && <p className="label px-1 pb-1.5 pt-3">More relevant</p>}
-                      <button onClick={() => { setSel(r.person.id); logFeedback("open", r, brief); }} className={`item flex w-full items-center gap-3 p-3 text-left ${on ? "item-on" : ""}`}>
-                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[11px] font-bold" style={{ background: "var(--raise)", color: "var(--accent-2)" }}>{initials(r.person.name)}</div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[14px] font-medium leading-snug">{r.person.name}</p>
-                          <p className="truncate text-[12.5px]" style={{ color: "var(--muted)" }}>{r.person.current_title}{r.person.company ? ` · ${r.person.company}` : ""}</p>
+                      <button onClick={() => { setSel(r.person.id); logFeedback("open", r, brief); }} className={`item w-full p-3 text-left ${on ? "item-on" : ""}`}>
+                        <div className="flex items-center gap-3">
+                          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[11px] font-bold" style={{ background: "var(--raise)", color: "var(--accent-2)" }}>{initials(r.person.name)}</div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[14px] font-medium leading-snug">{r.person.name}</p>
+                            <p className="truncate text-[12.5px]" style={{ color: "var(--muted)" }}>{r.person.current_title}{r.person.company ? ` · ${r.person.company}` : ""}</p>
+                          </div>
+                          <MatchMeter score={r.score} segments={5} />
                         </div>
-                        <MatchMeter score={r.score} segments={5} />
+                        {/* The receipt: the line from their own résumé that matched the brief, so a
+                            recruiter can verify the match at a glance instead of trusting the score. */}
+                        {r.person.evidence && <Receipt ev={r.person.evidence} />}
                       </button>
                     </div>
                   );

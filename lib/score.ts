@@ -259,10 +259,14 @@ export function matchesFunction(p: Person, q: StructuredQuery): boolean {
   });
 }
 
-/** Rank the retrieved pool by business score, return the strongest first (for the AI cut). */
+/** Rank the retrieved pool by business score, return the strongest first (for the AI cut).
+ *  Ties break DETERMINISTICALLY by id: many candidates land on the same integer score, and
+ *  without a stable second key their order follows whatever sequence the DB happened to return
+ *  — so the same search silently reshuffles who makes the cut between runs. (This is the exact
+ *  flaw tpf-profile-matcher's own audit blames for candidates swapping in and out of its top-20.) */
 export function preRank(people: Person[], q: StructuredQuery): Person[] {
   return people
     .map((p) => ({ p, s: businessScore(p, q).total }))
-    .sort((a, b) => b.s - a.s)
+    .sort((a, b) => b.s - a.s || a.p.id.localeCompare(b.p.id))
     .map((x) => x.p);
 }
