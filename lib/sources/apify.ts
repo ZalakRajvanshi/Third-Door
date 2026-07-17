@@ -27,30 +27,57 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
-/** Best-effort mapping of an arbitrary Apify person record → unified Person. */
+/**
+ * Map a harvestapi/linkedin-profile-search record → unified Person.
+ *
+ * VERIFIED against a real run — the previous "best-effort" guesses were all wrong for this
+ * actor, and each one silently produced a broken candidate:
+ *   • company  read `companyName` at the top level → always NULL. It lives in
+ *     currentPosition[].companyName. A null company guts careerScore (34/100 — the heaviest
+ *     signal) and tierScore, so a genuine Razorpay PM would have scored like a nobody.
+ *   • location read `location` as a string → always NULL. It's an object
+ *     {linkedinText, parsed:{...}}.
+ *   • experience read `e.company`/`e.title` → the actor uses `companyName`/`position`, so every
+ *     past role became the literal placeholder "—".
+ * Fallbacks to the old generic keys are kept so a different actor still degrades gracefully.
+ */
 function normalizeApify(raw: Record<string, any>, i: number): Person {
   const name = str(raw.fullName) ?? str(raw.name) ?? ([raw.firstName, raw.lastName].filter(Boolean).join(" ") || "Unknown");
-  const title = str(raw.headline) ?? str(raw.title) ?? str(raw.jobTitle) ?? str(raw.position);
-  const company = str(raw.companyName) ?? str(raw.company) ?? str(raw.currentCompany);
-  const location = str(raw.location) ?? str(raw.addressWithCountry) ?? str(raw.city);
-  const url = str(raw.url) ?? str(raw.profileUrl) ?? str(raw.linkedinUrl);
-  const skills = Array.isArray(raw.skills)
-    ? raw.skills.map((s: any) => (typeof s === "string" ? s : s?.name)).filter(Boolean).slice(0, 12)
-    : [];
+  const positions: any[] = Array.isArray(raw.currentPosition) ? raw.currentPosition : [];
+  const history: any[] = Array.isArray(raw.experience) ? raw.experience : [];
+  const cur = positions[0] ?? history[0] ?? {};
+
+  // headline is marketing ("Lead PM | Global Payments | Wallets | UPI • SEPA • FPS | FinTech");
+  // the actual position title is cleaner for matching and for the card.
+  const title = str(cur.position) ?? str(raw.headline) ?? str(raw.title) ?? str(raw.jobTitle) ?? str(raw.position);
+  const company = str(cur.companyName) ?? str(raw.companyName) ?? str(raw.company) ?? str(raw.currentCompany);
+  const location =
+    str(raw.location?.linkedinText) ?? str(raw.location?.parsed?.text) ?? str(raw.location?.parsed?.country) ??
+    str(raw.location) ?? str(raw.addressWithCountry) ?? str(raw.city);
+  const url = str(raw.linkedinUrl) ?? str(raw.url) ?? str(raw.profileUrl);
+  // skills are [{name, positions}], not strings
+  const skills: string[] = [...(Array.isArray(raw.skills) ? raw.skills : []), ...(Array.isArray(raw.topSkills) ? raw.topSkills : [])]
+    .map((s: any) => (typeof s === "string" ? s : str(s?.name)))
+    .filter((s): s is string => Boolean(s))
+    .slice(0, 12);
+
+  // FULL career graph, same as the DB pools: current first, then every past employer. This is
+  // what lets "ex-Flipkart payments" match — matching on the current job alone misses it.
+  const experience = history
+    .map((e: any) => ({ company: str(e.companyName) ?? str(e.company) ?? "", title: str(e.position) ?? str(e.title) ?? "" }))
+    .filter((e) => e.company)
+    .slice(0, 12);
+  if (!experience.length && company) experience.push({ company, title: title ?? "" });
 
   return {
     id: `apify:${url ?? raw.id ?? `${name}-${i}`}`,
     name,
-    headline: title,
+    headline: str(raw.headline) ?? title,
     current_title: title,
     company,
     location,
-    summary: str(raw.summary) ?? str(raw.about) ?? null,
-    experience: Array.isArray(raw.experience)
-      ? raw.experience.slice(0, 3).map((e: any) => ({ company: str(e.company) ?? "—", title: str(e.title) ?? "" }))
-      : company
-      ? [{ company, title: title ?? "" }]
-      : [],
+    summary: str(raw.about) ?? str(raw.summary) ?? str(cur.description) ?? null,
+    experience,
     skills,
     education: [],
     social_links: url ? [{ type: "linkedin", url }] : [],
