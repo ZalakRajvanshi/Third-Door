@@ -6,10 +6,18 @@ import { COST } from "@/lib/config";
 //
 // Configure with:
 //   APIFY_TOKEN     — your Apify API token
-//   APIFY_ACTOR_ID  — the actor to run, e.g. "apimaestro~linkedin-profile-search"
+//   APIFY_ACTOR_ID  — the actor to run. Built for "harvestapi~linkedin-profile-search"
+//                     (the discovery actor the data pipeline uses); `input` below matches
+//                     ITS schema. Point this at a different actor and the input keys change.
 //
-// Actor input/output shapes vary; normalizeApify() is defensive and may need a small
-// tweak to match the exact actor you choose.
+// COST — this actor is PAY_PER_EVENT, and the bill scales with how many pages it walks:
+//   full-profile             $4  / 1k profiles
+//   full-profile-with-email  $10 / 1k profiles
+//   minimum charge per run   $0.10
+// maxItems is the safety rail; MAX_USD_PER_SEARCH derives it. Per the team's own retro
+// ("burned $12 once"), never widen this without extrapolating the full-run cost first.
+//
+// normalizeApify() is deliberately defensive about output field names.
 
 const TOKEN = process.env.APIFY_TOKEN;
 const ACTOR = process.env.APIFY_ACTOR_ID;
@@ -60,14 +68,20 @@ export const apifyAdapter: SourceAdapter = {
     try {
       // Run the actor synchronously and read its dataset items in one call.
       const endpoint = `https://api.apify.com/v2/acts/${ACTOR}/run-sync-get-dataset-items?token=${TOKEN}`;
-      const input = {
-        // Generic input keys most search actors accept; harmless extras are ignored.
+      // Input matches harvestapi/linkedin-profile-search's real schema. The previous generic
+      // shape (`location`, `queries`, `keywords`, `maxResults`) used keys this actor doesn't
+      // have — they were silently ignored, so it would have run an unfiltered, needlessly
+      // expensive search. Every filter we pass narrows the result set and therefore the bill.
+      const locations = query.locations.length ? query.locations.slice(0, 3) : query.india ? ["India"] : [];
+      const input: Record<string, unknown> = {
         searchQuery: query.raw,
-        queries: query.hypotheses.slice(0, 3),
-        keywords: [...query.roles, ...query.skills].slice(0, 5),
-        location: query.locations[0] ?? "",
-        maxItems: COST.APIFY_MAX_RESULTS,
-        maxResults: COST.APIFY_MAX_RESULTS,
+        maxItems: COST.APIFY_MAX_RESULTS, // hard cap → bounds the spend (see MAX_USD_PER_SEARCH)
+        // "Full" per the data contract: Short rows can't be upgraded later without re-paying.
+        profileScraperMode: "Full",
+        ...(locations.length ? { locations } : {}),
+        ...(query.roles.length ? { currentJobTitles: query.roles.slice(0, 5) } : {}),
+        // companies the JD named: match them CURRENT or PAST — a past stint is why someone fits
+        ...(query.companies.length ? { currentCompanies: query.companies.slice(0, 5), pastCompanies: query.companies.slice(0, 5) } : {}),
       };
       const res = await fetch(endpoint, {
         method: "POST",
