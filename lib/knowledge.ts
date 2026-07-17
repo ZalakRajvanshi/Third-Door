@@ -47,9 +47,23 @@ export function companyTier(name: string | null | undefined): Tier {
   // an un-enriched row still lets the hardcoded list have a say before we give up
   if (info && info.tier !== "unknown") return info.tier;
   const n = norm(name);
-  if (TIER1.some((c) => n.includes(c))) return "tier1";
-  if (TIER2.some((c) => n.includes(c))) return "tier2";
+  if (matchesKnown(n, TIER1)) return "tier1";
+  if (matchesKnown(n, TIER2)) return "tier2";
   return "unknown"; // not in the data and not a known name — we don't know, so don't guess
+}
+
+/**
+ * Match a company name against a known-brand list WITHOUT substring false-positives.
+ * `n.includes(c)` was catastrophic here: "ey" (Ernst & Young) matched Honeywell / Disney /
+ * Money View / Greyorange; "ola" matched Motorola and Coca Cola; "meta" matched Metabase.
+ * All were then reported to the ranker as verified Tier-1 — which the prompt orders it to trust.
+ *   • multi-word entries ("boston consulting") — substring is safe, they're distinctive
+ *   • short entries (<= 4 chars: ey, ola, meta, navi, tata, cred, zoho) — WHOLE-NAME match only
+ *   • everything else — whole-TOKEN match, so "Google India" hits but "Metabase" doesn't
+ */
+function matchesKnown(n: string, list: string[]): boolean {
+  const tokens = new Set(n.split(" ").filter(Boolean));
+  return list.some((c) => (c.includes(" ") ? n.includes(c) : c.length <= 4 ? n === c : tokens.has(c)));
 }
 
 /** Does this person's background satisfy a requested pedigree (tier1 / tier2+)?

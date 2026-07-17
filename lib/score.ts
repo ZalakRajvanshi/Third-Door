@@ -31,7 +31,10 @@ function companies(p: Person): string[] {
   const out = [p.company, ...p.experience.map((e) => e.company)].filter(Boolean) as string[];
   const flags: string[] = Array.isArray(dossier(p).flags) ? dossier(p).flags : [];
   // luma/yc flags like "Ex-FAANG", "Big tech", "Tier: tier1" → treat as tier1 evidence
-  if (flags.some((f) => /faang|big tech|unicorn|tier-1|tier:\s*(tier_?1|faang|unicorn)/i.test(f))) out.push("google");
+  // NOTE: "big ?4" matters — the binary pool emits the literal flag "Big 4", and companyTier
+  // treats big4 as a Tier-1 ask, but this regex didn't recognise it. So a candidate carrying the
+  // exact pedigree the brief asked for failed meetsTier while their "Ex-FAANG" peer passed.
+  if (flags.some((f) => /faang|big tech|big ?4|unicorn|tier-1|tier:\s*(tier_?1|faang|unicorn)/i.test(f))) out.push("google");
   return out;
 }
 
@@ -132,15 +135,22 @@ function careerScore(p: Person, q: StructuredQuery): number {
     // CURRENT company's real domains (companies_metadata) — cleanest, most recent signal
     const cur = (lookupCompany(p.company)?.domains ?? []).map(lc);
     const curHit = cur.some((d) => want.includes(d));
-    // ANY past company in the domain — the 4x lift, discounted for recency
-    const past = p.experience.slice(1).flatMap((e) => lookupCompany(e.company)?.domains ?? []).map(lc);
+    // ANY past company in the domain — the 4x lift, discounted for recency.
+    // experience[0] is the current company ONLY when p.company is set; otherwise entry 0 is
+    // already a past employer and slicing it off would hide a real stint.
+    const pastCos = p.company ? p.experience.slice(1) : p.experience;
+    const past = pastCos.flatMap((e) => lookupCompany(e.company)?.domains ?? []).map(lc);
     const pastHit = past.some((d) => want.includes(d));
     // text/dossier evidence (no company metadata match)
     const expanded = q.domains.flatMap((d) => expandTerms([d], 8));
     const hay = [lc(p.summary), lc(p.company), ...(dossier(p).domains ?? []).map(lc)].join(" ");
     const textHit = q.domains.some((d) => hay.includes(lc(d))) || expanded.some((w) => hay.includes(w));
+    // Do we actually KNOW any of their employers? If none resolve to companies_metadata we have
+    // no domain evidence either way — that's our data gap, not a wrong-domain candidate. Same
+    // principle tierScore already applies; career carries 4x the weight, so it mattered 4x more.
+    const known = [p.company, ...p.experience.map((e) => e.company)].some((c) => lookupCompany(c));
 
-    let s = curHit ? 0.95 : pastHit ? 0.75 : textHit ? 0.5 : 0.15;
+    let s = curHit ? 0.95 : pastHit ? 0.75 : textHit ? 0.5 : known ? 0.15 : 0.45;
     // A named company must NOT override the domain: a JD saying "payments, ideally from
     // Flipkart" is not satisfied by a Flipkart PM who did Assets & Inventory. Being at a named
     // company is a floor (real evidence), not a free pass — the domain still decides the top.

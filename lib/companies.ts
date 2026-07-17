@@ -25,8 +25,11 @@ export interface CompanyInfo {
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
-// noise words we strip so "Flipkart India Pvt Ltd" resolves to "flipkart"
-const SUFFIX = /\b(pvt|private|ltd|limited|inc|incorporated|llp|llc|technologies|technology|tech|solutions|systems|software|labs|india|global|services|group|corp|corporation|co|company|the)\b/g;
+// Legal/geographic noise we strip so "Flipkart India Pvt Ltd" resolves to "flipkart".
+// Deliberately does NOT include tech/technologies/global/group/solutions/systems/software/labs —
+// those are load-bearing parts of real names, and stripping them merged distinct companies:
+// "Tech Mahindra" -> "mahindra" (the auto conglomerate), "Tata Technologies" -> "tata".
+const SUFFIX = /\b(pvt|private|ltd|limited|inc|incorporated|llp|llc|india|corp|corporation|co|company|the)\b/g;
 
 function deriveTier(r: any): Tier {
   if (r.is_faang || r.is_unicorn || r.is_big4 || r.is_consulting) return "tier1";
@@ -112,11 +115,15 @@ export function lookupCompany(raw: string | null | undefined): CompanyInfo | nul
   if (!CACHE || !raw) return null;
   const n = norm(raw);
   if (CACHE.has(n)) return CACHE.get(n)!;
-  // strip corp noise then try progressively shorter leading token windows: "flipkart india pvt ltd" → "flipkart"
+  // strip legal noise: "flipkart india pvt ltd" → "flipkart"
   const cleaned = n.replace(SUFFIX, " ").replace(/\s+/g, " ").trim();
   if (cleaned && CACHE.has(cleaned)) return CACHE.get(cleaned)!;
+  // Progressively shorter leading token windows — but NEVER down to a single token when the
+  // name has more. Collapsing to the first token handed unrelated companies a famous brand's
+  // identity: "Meta Foods Pvt Ltd" → "meta" → Meta/FAANG/Tier-1, "Apple Hospitality" → "apple".
+  // Real variants ("Flipkart India Pvt Ltd") are already handled by SUFFIX + the aliases column.
   const toks = cleaned.split(" ").filter(Boolean);
-  for (let take = Math.min(3, toks.length); take >= 1; take--) {
+  for (let take = Math.min(3, toks.length); take >= 2; take--) {
     const key = toks.slice(0, take).join(" ");
     if (CACHE.has(key)) return CACHE.get(key)!;
   }

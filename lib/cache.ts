@@ -13,8 +13,20 @@ const R_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const hasRedis = Boolean(R_URL && R_TOKEN);
 const TTL_S = Math.floor(COST.CACHE_TTL_MS / 1000);
 
+/** Key off a hash of the WHOLE input. Callers used to pass a truncated prefix, so two JDs from
+ *  the same company that shared an "About Us" preamble collided and the second search returned
+ *  the first role's shortlist (marked cached, with no signal anything was wrong). */
 export function cacheKey(q: string): string {
-  return "td:q:" + q.trim().toLowerCase().replace(/\s+/g, " ");
+  const s = q.trim().toLowerCase().replace(/\s+/g, " ");
+  // FNV-1a over the full string — fast, dependency-free, ample for cache bucketing.
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ c, 0x85ebca6b) + i;
+  }
+  const hash = ((h1 >>> 0).toString(36) + (h2 >>> 0).toString(36)).padStart(12, "0");
+  return `td:q:${s.length}:${hash}`;
 }
 
 // ── Upstash REST: POST the base URL with a command array, e.g. ["GET", key] ──

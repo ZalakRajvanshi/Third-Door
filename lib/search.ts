@@ -1,7 +1,7 @@
 import type { Person, RankedPerson, StructuredQuery } from "@/lib/types";
 import { supabaseAdapter } from "@/lib/sources/supabase";
 import { apifyAdapter, hasApify } from "@/lib/sources/apify";
-import { parseIntent, heuristicQuery } from "@/lib/intent";
+import { parseIntent, heuristicQuery, extractCount } from "@/lib/intent";
 import { rankPeople } from "@/lib/rank";
 import { preRank, businessScore, matchesFunction } from "@/lib/score";
 import { ensureCompanies } from "@/lib/companies";
@@ -110,7 +110,7 @@ export async function runSearch(input: string | SearchInput): Promise<SearchResu
   if (!intentText) throw new Error("Empty search input");
 
   // ── Step 1: CACHE (free) ── key off all inputs so JD+note variants don't collide
-  const key = cacheKey(`${hasJd ? "jd:" : ""}${displayBrief}::${embedText.slice(0, 400)}`);
+  const key = cacheKey(`${hasJd ? "jd:" : ""}${displayBrief}::${noteT}::${embedText}`); // full text — a truncated key collided across JDs sharing a boilerplate header
   const cached = await cacheGet<SearchResult>(key);
   if (cached) return { ...cached, meta: { ...cached.meta, cached: true } };
 
@@ -131,6 +131,9 @@ export async function runSearch(input: string | SearchInput): Promise<SearchResu
     // semantic embeds the full JD; rank/UI use a synthesized role brief (token-cheap, clean)
     query.embedText = embedText;
     query.raw = synthBrief(query, noteT, displayBrief);
+    // A result count may ONLY come from the recruiter's own ask. Read from a JD body it matched
+    // ordinary prose ("lead a team of 3 people" -> 3) and truncated the shortlist to 3.
+    if (hasJd) query.wantCount = extractCount(noteT.toLowerCase());
     mark("intent", s);
 
     // ── Step 2: DATABASE (cheap) — always first ──
@@ -202,7 +205,7 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
   const { intentText, embedText, displayBrief, noteT, hasJd } = shapeInput(input);
   if (!intentText) { emit({ type: "error", error: "Empty search input" }); return; }
 
-  const key = cacheKey(`${hasJd ? "jd:" : ""}${displayBrief}::${embedText.slice(0, 400)}`);
+  const key = cacheKey(`${hasJd ? "jd:" : ""}${displayBrief}::${noteT}::${embedText}`); // full text — a truncated key collided across JDs sharing a boilerplate header
   const cached = await cacheGet<SearchResult>(key);
   if (cached) { emit({ type: "final", results: cached.results, query: cached.query, meta: { ...cached.meta, cached: true } }); return; }
 
@@ -213,6 +216,7 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
   try {
     const hq = heuristicQuery(intentText);
     hq.embedText = embedText; // preview runs semantic too, so relevant people show from the start
+    if (hasJd) hq.wantCount = extractCount(noteT.toLowerCase()); // never read a count out of the JD body
     const prelimPeople = dedupe(await supabaseAdapter.search(hq));
     const preRanked = preRank(prelimPeople, hq);
     // same soft function-ordering as the final, so the preview doesn't flash an off-function
@@ -231,6 +235,7 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
     const query = await parseIntent(intentText);
     query.embedText = embedText;
     query.raw = synthBrief(query, noteT, displayBrief);
+    if (hasJd) query.wantCount = extractCount(noteT.toLowerCase()); // never read a count out of the JD body
 
     const dbPeople = dedupe(await supabaseAdapter.search(query));
     let preRanked = preRank(dbPeople, query);

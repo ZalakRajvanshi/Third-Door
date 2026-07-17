@@ -13,7 +13,10 @@ const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SECRET_KEY;
 const hasSupabase = Boolean(URL && KEY);
 const db = () => createClient(URL!, KEY!);
-const safe = (t: string) => t.replace(/[,%()*]/g, " ").trim().toLowerCase();
+// Strip everything that breaks PostgREST's .or() grammar. The value is interpolated INSIDE a
+// double-quoted string, so a stray " or \ from a JD-derived company name ("Byju's", ex-"Flipkart")
+// produced a 400 that killed the query for ALL FIVE pools at once.
+const safe = (t: string) => t.replace(/[,%()*"\\]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
 interface SrcCfg {
   label: string; table: string; sel: string; limit?: number;
@@ -154,8 +157,11 @@ async function runSource(client: any, s: SrcCfg, query: StructuredQuery, terms: 
     if (m.india && query.india) qb = qb.eq(m.india, true);
     // soft floor: allow a 2-year stretch below the ask so a strong near-miss surfaces
     // (scored down in businessScore), instead of being hard-dropped by the DB.
-    if (m.yoe && query.yoeMin != null) qb = qb.gte(m.yoe, Math.max(0, query.yoeMin - 2));
-    if (m.yoe && query.yoeMax != null) qb = qb.lte(m.yoe, query.yoeMax);
+    // NULL must PASS: `col >= 3` is NULL for a null col, so Postgres drops the row — which
+    // deleted luma candidates carrying a full 9-year dated career in searchable_text but no
+    // total_experience_years. Sparse data is not a disqualification.
+    if (m.yoe && query.yoeMin != null) qb = qb.or(`${m.yoe}.gte.${Math.max(0, query.yoeMin - 2)},${m.yoe}.is.null`);
+    if (m.yoe && query.yoeMax != null) qb = qb.or(`${m.yoe}.lte.${query.yoeMax},${m.yoe}.is.null`);
     if (m.city && query.locations[0]) {
       // match every spelling of the city (Bangalore ⇒ bengaluru) or matches silently vanish
       const variants = cityVariants(query.locations[0]).map(safe).filter(Boolean);
@@ -188,17 +194,27 @@ async function runSource(client: any, s: SrcCfg, query: StructuredQuery, terms: 
     // The full-text column needs a GIN trigram index (supabase/trigram_indexes.sql) — without it
     // an ILIKE '%x%' over 64k multi-KB rows blows the statement timeout. If that happens, retry on
     // the small columns so the pool degrades to its old behaviour instead of silently vanishing.
-    if (error && m.full && !FULLTEXT_UNAVAILABLE.has(s.table)) {
-      FULLTEXT_UNAVAILABLE.add(s.table); // don't pay this timeout again on the next search
-      console.warn(`[src ${s.label}] full-text search on ${m.full} failed (${error.message.slice(0, 60)}) — falling back to summary columns. Run supabase/trigram_indexes.sql to enable full-text (measured 4–10x recall).`);
+    // Only a STATEMENT TIMEOUT means "this column has no trigram index". Tripping the breaker on
+    // any error (a transient 503, a malformed filter) would permanently disable full-text on this
+    // warm instance even though the index exists. Retry regardless; only latch on a real timeout.
+    if (error && m.full && terms.length && !FULLTEXT_UNAVAILABLE.has(s.table)) {
+      const timedOut = error.code === "57014" || /statement timeout|canceling statement/i.test(error.message ?? "");
+      if (timedOut) {
+        FULLTEXT_UNAVAILABLE.add(s.table); // don't pay this timeout again on the next search
+        console.warn(`[src ${s.label}] full-text on ${m.full} exceeded the statement timeout — falling back to summary columns. Run supabase/trigram_indexes.sql to enable it (measured 4–10x recall).`);
+      }
       const r = await build(true, true);
       data = r.data; error = r.error;
     }
     // Fallback WITHOUT terms orders by yoe-desc = "the most experienced humans", unrelated to the
     // JD. Only acceptable when semantic is OFF (keyword is all we have). When semantic is ON, the
     // vector lane carries recall for thin-keyword JDs — so skip this noise entirely.
+    // UNION, don't replace: build(false) drops the keyword OR and returns the top-70 by yoe desc.
+    // Assigning it discarded the genuine keyword matches we already had — trading 5 on-brief
+    // people for 70 of the most-experienced strangers in the family.
     if (!error && useFamily && (data?.length ?? 0) < 6 && !COST.SEARCH_SEMANTIC) {
-      const r = await build(false); if (!r.error) data = r.data;
+      const r = await build(false);
+      if (!r.error) data = [...(data ?? []), ...(r.data ?? [])]; // dedupe() in search.ts collapses overlaps
     }
     if (error) { console.error(`[src ${s.label}] ${error.message.slice(0, 90)}`); return []; }
     return (data ?? []).map((r: any) => normalize(s, r));

@@ -21,15 +21,34 @@ function inferSeniority(seniority: string[], yoeMin: number | null, raw: string)
   return Array.from(s);
 }
 
-/** Pull an explicit "how many" out of a prompt — "50 profiles", "top 100", "give me 20". */
-function extractCount(t: string): number | null {
+/**
+ * Pull an explicit "how many" out of the recruiter's ASK — "give me 50 profiles", "top 100".
+ *
+ * MUST only ever run on the recruiter's own note/query, NEVER on a JD body. The old patterns
+ * matched ordinary JD prose and then silently truncated the whole result set:
+ *   "you will manage 3 people and own the roadmap" -> 3   (returned exactly 3 candidates)
+ *   "we need 5+ years of experience"               -> 5
+ * So both the pattern AND the input are now tight: an explicit request verb must sit next to
+ * the number, and a following "years/yrs" disqualifies it outright.
+ */
+export function extractCount(t: string): number | null {
   const m =
-    t.match(/\b(\d{1,4})\s*(?:profiles|people|candidates|results|names|matches|folks|persons?)\b/) ||
-    t.match(/\b(?:top|show|give\s+me|list|find|need|want|get\s+me)\s+(\d{1,4})\b/);
+    // "give me 50 profiles" / "show 20 candidates" / "send me the top 10 people"
+    t.match(/\b(?:give|show|list|find|get|send|share|fetch|need|want)\s+(?:me\s+)?(?:the\s+)?(?:top\s+)?(\d{1,4})\s*(?:profiles|people|candidates|names|matches|folks|persons?)\b/) ||
+    // "top 50" / "top 100 profiles"
+    t.match(/\btop\s+(\d{1,4})\b(?!\s*(?:years|yrs|yr))/) ||
+    // bare "50 profiles" / "100 candidates" — but never "3 people" inside a sentence about a team
+    t.match(/^\s*(\d{1,4})\s*(?:profiles|candidates|names|matches)\b/);
   if (!m) return null;
+  // guard: anything followed by years/yrs is an experience requirement, not a result count
+  if (new RegExp(`\\b${m[1]}\\s*\\+?\\s*(?:years|yrs|yr)\\b`).test(t)) return null;
   const n = parseInt(m[1], 10);
   return Number.isFinite(n) && n > 0 && n <= 1000 ? n : null;
 }
+
+// Only these count as "India is implied" — a JD for London must NOT set india=true, which
+// would force `.eq(is_india, true)` on every pool and return literally zero rows.
+const INDIA_HINT = /\b(india|indian|bengaluru|bangalore|mumbai|delhi|ncr|pune|chennai|hyderabad|gurgaon|gurugram|noida|kolkata|ahmedabad|jaipur|chandigarh|indore|kochi|coimbatore)\b/i;
 
 export function heuristicQuery(raw: string): StructuredQuery {
   const t = raw.toLowerCase();
@@ -47,7 +66,7 @@ export function heuristicQuery(raw: string): StructuredQuery {
   return {
     raw, roles: [], roleFamilies: families, seniority: inferSeniority([], yoeMin, raw),
     yoeMin, yoeMax: null,
-    locations: [], india: /india|bengaluru|bangalore|mumbai|delhi|pune|chennai|hyderabad|gurgaon|gurugram|noida/.test(t),
+    locations: [], india: INDIA_HINT.test(t),
     companyTier: tier, companies: [], domains: [], compMinLpa: null, compMaxLpa: null, signals: [], skills: [],
     keywords: t.replace(/[^a-z0-9+ ]/g, " ").split(/\s+/).filter((w) => w.length > 2).slice(0, 8),
     hypotheses: [raw], mustHave: [], niceToHave: [], wantCount: extractCount(t),
@@ -103,7 +122,8 @@ export async function parseIntent(raw: string): Promise<StructuredQuery> {
       yoeMin: typeof p.yoeMin === "number" ? p.yoeMin : null,
       yoeMax: typeof p.yoeMax === "number" ? p.yoeMax : null,
       locations: arr(p.locations),
-      india: p.india === true || arr(p.locations).length > 0,
+      // a non-Indian location must not imply India (see INDIA_HINT)
+      india: p.india === true || arr(p.locations).some((l) => INDIA_HINT.test(l)),
       companyTier: arr(p.companyTier),
       companies: arr(p.companies).slice(0, 12),
       domains: arr(p.domains).map((d) => d.toLowerCase()),

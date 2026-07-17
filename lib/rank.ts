@@ -73,7 +73,8 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
         tier: tierLabel(companyTier(p.company)), // our VERIFIED prestige — don't let the model guess
         // PAST companies — "ex-Flipkart" is often the whole reason someone fits, and it's
         // invisible from the current employer alone. Capped to keep the payload cheap.
-        past: p.experience.slice(1, 6).map((e) => e.company).filter(Boolean),
+        // experience[0] is only the CURRENT company when p.company is set.
+        past: (p.company ? p.experience.slice(1, 6) : p.experience.slice(0, 5)).map((e) => e.company).filter(Boolean),
         domains: (d.domains ?? []).slice(0, 5),
         signals: (d.flags ?? []).slice(0, 6), // Ex-FAANG, Unicorn, IIT/IIM, Growth PM, ~35 LPA…
         summary: (p.summary ?? "").slice(0, 220),
@@ -153,8 +154,10 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
             `For EACH return {id, score (0-100), why: string[2-3], concerns: string[1-2]}.\n` +
             `• score: judge "is this genuinely one of the strongest candidates for THIS brief?" — ` +
             `evidence of impact and ownership should move the score more than a matching title.\n` +
-            `• why: cite ACTUAL facts — years, company (with its verified tier), role, measurable impact, a ` +
-            `listed signal/domain (e.g. "9 yrs, ex-Flipkart (Tier-1), scaled growth funnel"). Never generic.\n` +
+            `• why: cite ACTUAL facts — years, company, role, measurable impact, a listed signal/domain ` +
+            `(e.g. "9 yrs, ex-Flipkart, scaled growth funnel 3x"). Never generic. State a tier ONLY for the ` +
+            `current company and ONLY the exact value in its "tier" field — the "past" array carries NO ` +
+            `tier data, so never attach a tier to a past company.\n` +
             `• concerns: a real gap vs the brief (e.g. "only 4 yrs vs 8 asked", "no Tier-1 pedigree", ` +
             `"title says growth but no measurable growth work"). Never "None".\n` +
             `Return ONLY a JSON array.`,
@@ -183,14 +186,11 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
         concerns: toStrArray(r.concerns),
       }));
 
-    // Any candidate the model skipped: keep them, but CAP the score so an un-vetted
-    // candidate can never outrank an AI-vetted one (and weak ones fall below the show floor).
-    for (const p of people) {
-      if (!ranked.find((r) => r.person.id === p.id)) {
-        const h = heuristicRank(p, q);
-        ranked.push({ ...h, score: Math.min(h.score, 62) });
-      }
-    }
+    // Candidates the model omitted are deliberately NOT added here. Capping them at 62 put them
+    // below MIN_SHOW_SCORE (65) so trim() dropped them, AND assemble() built `seenByAi` from this
+    // array — so they were excluded from the tail too, and disappeared from the search entirely.
+    // These are the TOP business-scored people in the pool; a truncated LLM response silently
+    // deleted them. Leaving them out of `ranked` lets assemble() score them into the tail instead.
     return ranked.sort((a, b) => b.score - a.score);
   } catch (e) {
     console.error("[rank] LLM failed, using heuristic:", e);
