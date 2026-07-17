@@ -54,11 +54,25 @@ function heuristicRank(person: Person, q: StructuredQuery): RankedPerson {
   return { person, score: Math.min(99, Math.max(35, score)), why, concerns };
 }
 
+/** Candidates per LLM call. One serial call over 40 took ~37s and dominated total latency; the
+ *  work splits cleanly, so we run batches CONCURRENTLY — identical token cost, ~half the wall
+ *  clock. Each batch scores against the same absolute brief, so scores stay comparable. */
+const RANK_BATCH = 14;
+
 export async function rankPeople(people: Person[], q: StructuredQuery): Promise<RankedPerson[]> {
   if (!hasLLM || people.length === 0) {
     return people.map((p) => heuristicRank(p, q)).sort((a, b) => b.score - a.score || a.person.id.localeCompare(b.person.id));
   }
+  if (people.length > RANK_BATCH) {
+    const batches: Person[][] = [];
+    for (let i = 0; i < people.length; i += RANK_BATCH) batches.push(people.slice(i, i + RANK_BATCH));
+    const out = await Promise.all(batches.map((b) => rankBatch(b, q)));
+    return out.flat().sort((a, b) => b.score - a.score || a.person.id.localeCompare(b.person.id));
+  }
+  return rankBatch(people, q);
+}
 
+async function rankBatch(people: Person[], q: StructuredQuery): Promise<RankedPerson[]> {
   try {
     const compact = people.map((p) => {
       const d = (p.dossier ?? {}) as any;
@@ -163,7 +177,7 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
             `Return ONLY a JSON array.`,
         },
       ],
-      3000
+      1600, // per-batch: 14 candidates x ~90 tokens of why/concerns, with headroom
     );
 
     const arr = extractJson<Array<{ id: string; score: number; why: string[]; concerns: string[] }>>(text);

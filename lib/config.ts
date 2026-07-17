@@ -13,10 +13,11 @@ export const COST = {
   /** If the DB yields at least this many strong matches, SKIP Apify entirely. */
   MIN_STRONG_RESULTS: 8,
 
-  /** How many candidates we send to the AI ranker. With clean retrieval (similarity floor +
-   *  real filters) 30 STRONG candidates beat 40 noisy ones — better output AND lower token cost.
-   *  gpt-4o-mini stays well under a cent at this size. */
-  MAX_RANK_CANDIDATES: 30,
+  /** How many candidates we send to the AI ranker — i.e. how many get real reasoning + a
+   *  why/concerns, which is what a recruiter actually reads. Now that retrieval ranks the whole
+   *  101k database by meaning (VECTOR_MATCH_COUNT) instead of skimming the most senior 0.7%,
+   *  the top 40 are genuinely worth vetting. gpt-4o-mini: still well under a cent per search. */
+  MAX_RANK_CANDIDATES: 40,
 
   /** HARD relevance floor for the AI-vetted top tier: drop anything below this. */
   MIN_SHOW_SCORE: 65,
@@ -42,8 +43,24 @@ export const COST = {
    *  backfilling embeddings. Until then the keyword path runs alone. */
   SEARCH_SEMANTIC: process.env.SEARCH_SEMANTIC === "on",
 
-  /** How many vector matches to pull per pool in the semantic lane. */
-  VECTOR_MATCH_COUNT: 40,
+  /**
+   * How many vector matches to pull per pool in the semantic lane.
+   *
+   * THIS IS THE LEVER THAT DECIDES QUALITY. The DB holds 101k profiles (luma alone has ~11.9k
+   * India-based PMs). The keyword lane can only return `limit` rows ordered by yoe desc — i.e.
+   * "the most senior people who matched", not "the best-matched people". Only the vector lane
+   * ranks the ENTIRE table by meaning (HNSW index, so 200 costs barely more than 40).
+   * At 40 we were judging a 101k database on ~0.7% of it, chosen by seniority.
+   * preRank scores whatever comes back in pure JS (free) and only MAX_RANK_CANDIDATES reach the
+   * LLM — so widening this buys much better candidates at ~zero extra AI cost.
+   */
+  VECTOR_MATCH_COUNT: 200,
+
+  /** Per-persona ("adjacent"/"pedigree" bets) vector pull — narrower, they're speculative. */
+  VECTOR_PERSONA_COUNT: 60,
+
+  /** Cap on rows fetched back per pool from the semantic lane (highest similarity first). */
+  VECTOR_FETCH_CAP: 250,
 
   /** Cosine-similarity floor for the semantic lane. Below this, a "match" is noise — the
    *  vector function always returns match_count rows however unrelated, so without a floor

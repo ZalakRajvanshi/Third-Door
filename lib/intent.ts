@@ -50,6 +50,11 @@ export function extractCount(t: string): number | null {
 // would force `.eq(is_india, true)` on every pool and return literally zero rows.
 const INDIA_HINT = /\b(india|indian|bengaluru|bangalore|mumbai|delhi|ncr|pune|chennai|hyderabad|gurgaon|gurugram|noida|kolkata|ahmedabad|jaipur|chandigarh|indore|kochi|coimbatore)\b/i;
 
+/** The recruiter explicitly asking for NEW people — the only thing that should spend money on
+ *  a live external scrape when the 101k database already answered. Read from their note only. */
+const FRESH_HINT = /\b(fresh|new profiles|new candidates|outside|external|not in (the )?(db|database)|scrape|source new|beyond (the )?database|more people)\b/i;
+export const wantsFresh = (t: string | null | undefined): boolean => Boolean(t && FRESH_HINT.test(t));
+
 export function heuristicQuery(raw: string): StructuredQuery {
   const t = raw.toLowerCase();
   const yoeMatch = t.match(/(\d+)\s*\+?\s*(?:years|yrs|y)\b/);

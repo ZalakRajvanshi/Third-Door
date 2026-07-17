@@ -1,7 +1,7 @@
 import type { Person, RankedPerson, StructuredQuery } from "@/lib/types";
 import { supabaseAdapter, attachEvidence } from "@/lib/sources/supabase";
 import { apifyAdapter, hasApify } from "@/lib/sources/apify";
-import { parseIntent, heuristicQuery, extractCount } from "@/lib/intent";
+import { parseIntent, heuristicQuery, extractCount, wantsFresh } from "@/lib/intent";
 import { rankPeople } from "@/lib/rank";
 import { preRank, businessScore, matchesFunction } from "@/lib/score";
 import { ensureCompanies } from "@/lib/companies";
@@ -83,7 +83,7 @@ function shapeInput(input: string | SearchInput) {
     : [noteT, qT].filter(Boolean).join(" ").trim();
   const embedText = jdT || qT || noteT;
   const displayBrief = (noteT || qT || jdT.split("\n").find((l) => l.trim())?.slice(0, 120) || jdT.slice(0, 120)).trim();
-  return { intentText, embedText, displayBrief, noteT, hasJd: Boolean(jdT) };
+  return { intentText, embedText, displayBrief, noteT, qT, hasJd: Boolean(jdT) };
 }
 
 const prettyFamily = (f: string) => f.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -117,7 +117,7 @@ function synthBrief(q: StructuredQuery, note: string, fallback: string): string 
 }
 
 export async function runSearch(input: string | SearchInput): Promise<SearchResult> {
-  const { intentText, embedText, displayBrief, noteT, hasJd } = shapeInput(input);
+  const { intentText, embedText, displayBrief, noteT, qT, hasJd } = shapeInput(input);
   if (!intentText) throw new Error("Empty search input");
 
   // ── Step 1: CACHE (free) ── key off all inputs so JD+note variants don't collide
@@ -145,6 +145,7 @@ export async function runSearch(input: string | SearchInput): Promise<SearchResu
     // A result count may ONLY come from the recruiter's own ask. Read from a JD body it matched
     // ordinary prose ("lead a team of 3 people" -> 3) and truncated the shortlist to 3.
     if (hasJd) query.wantCount = extractCount(noteT.toLowerCase());
+    query.wantFresh = wantsFresh(noteT || qT); // only an explicit ask may spend on a live scrape
     mark("intent", s);
 
     // ── Step 2: DATABASE (cheap) — always first ──
@@ -164,8 +165,12 @@ export async function runSearch(input: string | SearchInput): Promise<SearchResu
     let totalFound = dbPeople.length;
     let dedupeCount = dbPeople.length;
 
-    // ── Step 3: APIFY (expensive) — ONLY if the DB couldn't supply enough strong matches ──
-    if (strong.length < COST.MIN_STRONG_RESULTS && hasApify) {
+    // ── Step 3: APIFY (expensive) — the database answers first, always. We only pay when it
+    // genuinely couldn't (too few strong matches), or when the recruiter explicitly asked for
+    // NEW people. With 101k profiles the DB should win almost every time; if Apify starts firing
+    // often, that's a retrieval problem to fix here, not a budget to spend.
+    const dbFellShort = strong.length < COST.MIN_STRONG_RESULTS;
+    if ((dbFellShort || query.wantFresh) && hasApify) {
       const external = await apifyAdapter.search(query);
       if (external.length) {
         usedApify = true;
@@ -216,7 +221,7 @@ function quickRank(p: Person, q: StructuredQuery): RankedPerson {
 }
 
 export async function runSearchProgressive(input: string | SearchInput, emit: (e: ProgressEvent) => void): Promise<void> {
-  const { intentText, embedText, displayBrief, noteT, hasJd } = shapeInput(input);
+  const { intentText, embedText, displayBrief, noteT, qT, hasJd } = shapeInput(input);
   if (!intentText) { emit({ type: "error", error: "Empty search input" }); return; }
 
   const key = cacheKey(`${hasJd ? "jd:" : ""}${displayBrief}::${noteT}::${embedText}`); // full text — a truncated key collided across JDs sharing a boilerplate header

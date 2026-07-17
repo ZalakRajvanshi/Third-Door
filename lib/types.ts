@@ -102,6 +102,7 @@ export interface StructuredQuery {
   niceToHave: string[];            // bonus signals that lift but aren't required
   embedText?: string;              // full text used for semantic embedding (the JD, when present)
   wantCount?: number | null;       // how many profiles the user explicitly asked for (null = dynamic)
+  wantFresh?: boolean;             // recruiter explicitly asked for NEW/fresh profiles → allow the paid external source
 }
 
 /** A source of people. New sources = new adapters; nothing downstream changes. */

@@ -50,7 +50,7 @@ const SOURCES: SrcCfg[] = [
     tier1: (r) => !!(r.faang_worked_flag || r.big4_worked_flag || r.tier1_companies_count > 0),
   },
   {
-    label: "luma", table: "luma_profiles", limit: 80,
+    label: "luma", table: "luma_profiles", limit: 200,
     sel: "full_name,designation,company,city_canonical,is_india,total_experience_years,title_seniority,title_role,inferred_role,domains_worked,career_summary,linkedin_slug,highest_company_tier,has_big_tech_exp,has_consulting_exp,has_startup_exp,all_companies_worked",
     m: { name: "full_name", title: "designation", company: "company", city: "city_canonical", india: "is_india", yoe: "total_experience_years", roleText: "title_role", domains: "domains_worked", slug: "linkedin_slug", summary: "career_summary", full: "searchable_text", fullIsSuperset: true, sen: "title_seniority", allCos: "all_companies_worked" },
     // Only surface highest_company_tier when it's a POSITIVE signal. Passing it through raw
@@ -60,7 +60,7 @@ const SOURCES: SrcCfg[] = [
     tier1: (r) => !!(r.has_big_tech_exp || ["tier1", "faang", "unicorn", "tier_1"].includes(String(r.highest_company_tier).toLowerCase())),
   },
   {
-    label: "yc", table: "yc_employees", limit: 60,
+    label: "yc", table: "yc_employees", limit: 120,
     sel: "full_name,current_title,current_company_name,city_canonical,is_india,total_experience_years,title_seniority,role_family,inferred_role,domains_worked,career_summary,linkedin_slug,highest_company_tier,has_big_tech_exp,has_consulting_exp,has_startup_exp,all_companies_worked",
     m: { name: "full_name", title: "current_title", company: "current_company_name", city: "city_canonical", india: "is_india", yoe: "total_experience_years", roleFamily: "role_family", domains: "domains_worked", slug: "linkedin_slug", summary: "career_summary", full: "searchable_text", fullIsSuperset: true, sen: "title_seniority", allCos: "all_companies_worked" },
     // Only surface highest_company_tier when it's a POSITIVE signal. Passing it through raw
@@ -70,13 +70,13 @@ const SOURCES: SrcCfg[] = [
     tier1: (r) => !!(r.has_big_tech_exp || ["tier1", "faang", "unicorn", "tier_1"].includes(String(r.highest_company_tier).toLowerCase())),
   },
   {
-    label: "ext", table: "ext_profiles", limit: 40,
+    label: "ext", table: "ext_profiles", limit: 100,
     sel: "full_name,designation,company,person_location,about,skills,inferred_role,linkedin_slug",
     m: { name: "full_name", title: "designation", company: "company", city: "person_location", roleText: "inferred_role", slug: "linkedin_slug", about: "about", skills: "skills" },
     flags: () => [], tier1: () => false,
   },
   {
-    label: "apify", table: "apify_search_profiles", limit: 60,
+    label: "apify", table: "apify_search_profiles", limit: 120,
     sel: "full_name,designation,company,person_location,about,skills,inferred_role,linkedin_slug",
     m: { name: "full_name", title: "designation", company: "company", city: "person_location", roleText: "inferred_role", slug: "linkedin_slug", about: "about", skills: "skills" },
     flags: () => [], tier1: () => false,
@@ -186,7 +186,7 @@ async function runSource(client: any, s: SrcCfg, query: StructuredQuery, terms: 
       if (ors) qb = qb.or(ors);
     }
     if (m.yoe) qb = qb.order(m.yoe, { ascending: false, nullsFirst: false });
-    return qb.limit(s.limit ?? 70);
+    return qb.limit(s.limit ?? 250); // binary is only 3.2k rows — no reason to skim 70 of it
   };
   try {
     // text tables (no role_family) NEED the keyword filter; family tables relax it if too few.
@@ -236,8 +236,11 @@ const VEC: Record<string, { fn: string; filt: boolean }> = {
 
 async function fetchBySlugs(client: any, s: SrcCfg, slugs: string[]): Promise<Person[]> {
   if (!slugs.length) return [];
-  const { data, error } = await client.from(s.table).select("id," + s.sel).in(s.m.slug, slugs.slice(0, 80));
-  if (error) return [];
+  // Caller passes slugs already ordered BEST-SIMILARITY-FIRST. This used to slice(0, 80) on
+  // Map-insertion order (i.e. persona-angle order), so a 0.91 match found by a later angle was
+  // thrown away while a 0.33 primary match was kept.
+  const { data, error } = await client.from(s.table).select("id," + s.sel).in(s.m.slug, slugs.slice(0, COST.VECTOR_FETCH_CAP));
+  if (error) { console.error(`[vec ${s.label}] fetch failed: ${String(error.message).slice(0, 80)}`); return []; }
   return (data ?? []).map((r: any) => normalize(s, r));
 }
 
@@ -261,7 +264,7 @@ async function vectorLane(client: any, query: StructuredQuery): Promise<Person[]
         // primary = the JD itself (trust it more); persona bets are speculative → higher floor
         const floor = vi === 0 ? COST.VECTOR_MIN_SIM : COST.VECTOR_MIN_SIM + 0.06;
         // relax the DB min_years pre-filter by 2 — near-misses should surface (scored down), not vanish
-        const params: Record<string, unknown> = { query_embedding: qvec, match_count: vi === 0 ? COST.VECTOR_MATCH_COUNT : 20 };
+        const params: Record<string, unknown> = { query_embedding: qvec, match_count: vi === 0 ? COST.VECTOR_MATCH_COUNT : COST.VECTOR_PERSONA_COUNT };
         if (v.filt) { params.only_india = !!query.india; if (query.yoeMin != null) params.min_years = Math.max(0, query.yoeMin - 2); }
         try {
           const { data, error } = await client.rpc(v.fn, params);
@@ -273,7 +276,9 @@ async function vectorLane(client: any, query: StructuredQuery): Promise<Person[]
           }
         } catch { /* ignore this angle */ }
       }));
-      const people = await fetchBySlugs(client, s, Array.from(simBySlug.keys()));
+      // best similarity first, so the fetch cap keeps the STRONGEST matches, not the earliest
+      const ranked = Array.from(simBySlug.entries()).sort((a, b) => b[1] - a[1]).map(([slug]) => slug);
+      const people = await fetchBySlugs(client, s, ranked);
       for (const p of people) {
         const slug = p.id.split(":").slice(1).join(":");
         (p as any)._sim = simBySlug.get(slug) ?? 0; // best similarity across all angles → hybrid blend
