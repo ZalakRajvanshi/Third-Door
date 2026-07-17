@@ -17,7 +17,23 @@ const safe = (t: string) => t.replace(/[,%()*]/g, " ").trim().toLowerCase();
 
 interface SrcCfg {
   label: string; table: string; sel: string; limit?: number;
-  m: { name: string; title: string; company?: string; city?: string; india?: string; yoe?: string; roleFamily?: string; roleText?: string; domains?: string; slug: string; one?: string; summary?: string; about?: string; skills?: string; ctc?: string };
+  m: {
+    name: string; title: string; company?: string; city?: string; india?: string; yoe?: string;
+    roleFamily?: string; roleText?: string; domains?: string; slug: string; one?: string;
+    summary?: string; about?: string; skills?: string; ctc?: string;
+    /** FULL searchable text (resume / searchable_text). SEARCHED but never SELECTED — it's
+     *  multi-KB per row, so pulling it would balloon the payload. This is where the real
+     *  evidence lives ("owned UPI reconciliation"), which short summary fields never carry. */
+    full?: string;
+    /** True when `full` already CONTAINS the small columns (luma/yc `searchable_text` embeds
+     *  name + designation + company + the whole dated career history). Then we search that ONE
+     *  column instead of OR-ing four — strictly better recall, and only one index needed. */
+    fullIsSuperset?: boolean;
+    /** seniority column (vocab differs per pool — normalised via the ladder in score.ts) */
+    sen?: string;
+    /** text[] of EVERY company worked at (current + past) — the documented 4x recall lift */
+    allCos?: string;
+  };
   flags: (r: any) => string[];
   tier1: (r: any) => boolean;
 }
@@ -26,21 +42,21 @@ const SOURCES: SrcCfg[] = [
   {
     label: "binary", table: "profiles",
     sel: "full_name,current_title,current_company,location_city,is_india,total_experience_years,seniority_level,role_family,domains,one_liner,search_summary,linkedin_slug,current_ctc_lpa,faang_worked_flag,big4_worked_flag,tier1_companies_count,iit_flag,iim_flag,has_founder_experience",
-    m: { name: "full_name", title: "current_title", company: "current_company", city: "location_city", india: "is_india", yoe: "total_experience_years", roleFamily: "role_family", domains: "domains", slug: "linkedin_slug", one: "one_liner", summary: "search_summary", ctc: "current_ctc_lpa" },
+    m: { name: "full_name", title: "current_title", company: "current_company", city: "location_city", india: "is_india", yoe: "total_experience_years", roleFamily: "role_family", domains: "domains", slug: "linkedin_slug", one: "one_liner", summary: "search_summary", ctc: "current_ctc_lpa", full: "resume_text", sen: "seniority_level" },
     flags: (r) => [r.faang_worked_flag && "Ex-FAANG", r.big4_worked_flag && "Big 4", r.tier1_companies_count > 0 && "Tier-1 cos", (r.iit_flag || r.iim_flag) && "IIT/IIM", r.has_founder_experience && "Founder"].filter(Boolean) as string[],
     tier1: (r) => !!(r.faang_worked_flag || r.big4_worked_flag || r.tier1_companies_count > 0),
   },
   {
     label: "luma", table: "luma_profiles", limit: 80,
-    sel: "full_name,designation,company,city_canonical,is_india,total_experience_years,title_seniority,title_role,inferred_role,domains_worked,career_summary,linkedin_slug,highest_company_tier,has_big_tech_exp,has_consulting_exp,has_startup_exp",
-    m: { name: "full_name", title: "designation", company: "company", city: "city_canonical", india: "is_india", yoe: "total_experience_years", roleText: "title_role", domains: "domains_worked", slug: "linkedin_slug", summary: "career_summary" },
+    sel: "full_name,designation,company,city_canonical,is_india,total_experience_years,title_seniority,title_role,inferred_role,domains_worked,career_summary,linkedin_slug,highest_company_tier,has_big_tech_exp,has_consulting_exp,has_startup_exp,all_companies_worked",
+    m: { name: "full_name", title: "designation", company: "company", city: "city_canonical", india: "is_india", yoe: "total_experience_years", roleText: "title_role", domains: "domains_worked", slug: "linkedin_slug", summary: "career_summary", full: "searchable_text", fullIsSuperset: true, sen: "title_seniority", allCos: "all_companies_worked" },
     flags: (r) => [r.has_big_tech_exp && "Big tech", r.has_consulting_exp && "Ex-consulting", r.has_startup_exp && "Startup", r.highest_company_tier && `Tier: ${r.highest_company_tier}`].filter(Boolean) as string[],
     tier1: (r) => !!(r.has_big_tech_exp || ["tier1", "faang", "unicorn", "tier_1"].includes(String(r.highest_company_tier).toLowerCase())),
   },
   {
     label: "yc", table: "yc_employees", limit: 60,
-    sel: "full_name,current_title,current_company_name,city_canonical,is_india,total_experience_years,title_seniority,role_family,inferred_role,domains_worked,career_summary,linkedin_slug,highest_company_tier,has_big_tech_exp,has_consulting_exp,has_startup_exp",
-    m: { name: "full_name", title: "current_title", company: "current_company_name", city: "city_canonical", india: "is_india", yoe: "total_experience_years", roleFamily: "role_family", domains: "domains_worked", slug: "linkedin_slug", summary: "career_summary" },
+    sel: "full_name,current_title,current_company_name,city_canonical,is_india,total_experience_years,title_seniority,role_family,inferred_role,domains_worked,career_summary,linkedin_slug,highest_company_tier,has_big_tech_exp,has_consulting_exp,has_startup_exp,all_companies_worked",
+    m: { name: "full_name", title: "current_title", company: "current_company_name", city: "city_canonical", india: "is_india", yoe: "total_experience_years", roleFamily: "role_family", domains: "domains_worked", slug: "linkedin_slug", summary: "career_summary", full: "searchable_text", fullIsSuperset: true, sen: "title_seniority", allCos: "all_companies_worked" },
     flags: (r) => [r.has_big_tech_exp && "Big tech", r.has_consulting_exp && "Ex-consulting", r.has_startup_exp && "Startup", r.highest_company_tier && `Tier: ${r.highest_company_tier}`].filter(Boolean) as string[],
     tier1: (r) => !!(r.has_big_tech_exp || ["tier1", "faang", "unicorn", "tier_1"].includes(String(r.highest_company_tier).toLowerCase())),
   },
@@ -71,6 +87,20 @@ function normalize(s: SrcCfg, r: any): Person {
   const rawYoe = m.yoe ? Number(r[m.yoe]) : NaN;
   const yoe = Number.isFinite(rawYoe) && rawYoe >= 0 && rawYoe <= 50 ? Math.round(rawYoe) : null;
   const comp = m.ctc ? r[m.ctc] : null;
+  // FULL career graph: current + every past company (all_companies_worked). This is the 4x
+  // recall lift — "ex-Flipkart payments" only matches if we look past the current employer.
+  // Downstream (tier, career/domain, target-company match) all read p.experience.
+  const nrm = (c: string) => c.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const past: string[] = m.allCos && Array.isArray(r[m.allCos]) ? r[m.allCos].filter(Boolean) : [];
+  const experience: { company: string; title: string }[] = [];
+  if (company) experience.push({ company, title: title ?? "" });
+  for (const co of past) {
+    if (typeof co !== "string" || !co.trim()) continue;
+    if (company && nrm(co) === nrm(company)) continue; // already the current row
+    if (experience.some((e) => nrm(e.company) === nrm(co))) continue;
+    experience.push({ company: co, title: "" });
+    if (experience.length >= 12) break;
+  }
   const person: any = {
     id: `${s.label}:${slug || (r[m.name] || "x").toLowerCase().replace(/\s+/g, "-")}`,
     name: r[m.name] ?? "Unknown",
@@ -79,7 +109,7 @@ function normalize(s: SrcCfg, r: any): Person {
     company: company ?? null,
     location: (m.city && r[m.city]) ?? null,
     summary,
-    experience: company ? [{ company, title: title ?? "" }] : [],
+    experience,
     skills: (skills.length ? skills : domains).slice(0, 12),
     education: [],
     social_links: slug ? [{ type: "linkedin", url: `https://linkedin.com/in/${slug}` }] : [],
@@ -88,7 +118,7 @@ function normalize(s: SrcCfg, r: any): Person {
     last_updated: new Date().toISOString(),
     _sources: [{ adapter: `supabase:${s.label}`, raw_id: String(slug ?? ""), trust: s.label === "binary" ? 1 : 0.85 }],
     dossier: {
-      years: yoe ?? null, seniority: (m as any).sen ? r[(m as any).sen] : null,
+      years: yoe ?? null, seniority: (m.sen && r[m.sen]) || null,
       // role family/text so scoring can match on function (binary/yc → role_family enum;
       // luma/ext/apify → title_role/inferred_role). Was never set → role-family scoring no-op'd.
       roleFamily: (m.roleFamily && r[m.roleFamily]) || (m.roleText && r[m.roleText]) || null,
@@ -103,10 +133,16 @@ function normalize(s: SrcCfg, r: any): Person {
   return person as Person;
 }
 
+// Circuit breaker: tables whose full-text column has no trigram index yet. The first search
+// pays one statement timeout discovering this; every search after skips straight to the small
+// columns instead of burning ~8s on a query we know will be cancelled. Clears on redeploy —
+// so once supabase/trigram_indexes.sql is run, full-text turns itself back on.
+const FULLTEXT_UNAVAILABLE = new Set<string>();
+
 async function runSource(client: any, s: SrcCfg, query: StructuredQuery, terms: string[]): Promise<Person[]> {
   const m = s.m;
   const useFamily = m.roleFamily && query.roleFamilies.length > 0;
-  const build = (withTerms: boolean) => {
+  const build = (withTerms: boolean, skipFull = false) => {
     let qb = client.from(s.table).select("id," + s.sel);
     if (useFamily) qb = qb.in(m.roleFamily!, query.roleFamilies);
     if (m.india && query.india) qb = qb.eq(m.india, true);
@@ -122,7 +158,16 @@ async function runSource(client: any, s: SrcCfg, query: StructuredQuery, terms: 
         : qb.ilike(m.city, `%${safe(query.locations[0])}%`);
     }
     if (withTerms && terms.length) {
-      const cols = [m.title, m.one, m.summary, m.roleText, m.about].filter(Boolean) as string[];
+      // m.full (resume_text / searchable_text) is the big one: the short summary fields say
+      // "Senior PM at Acme", the full text says "owned UPI reconciliation, cut failures 40%".
+      // Filtering on a non-selected column is fine — we search it without paying to fetch it.
+      // When `full` is a superset (luma/yc searchable_text embeds title+company+career), search
+      // ONLY it: one indexed column beats OR-ing four unindexed ones, and misses nothing.
+      const full = skipFull || FULLTEXT_UNAVAILABLE.has(s.table) ? undefined : m.full;
+      const cols = (full && m.fullIsSuperset
+        ? [full]
+        : [m.title, m.one, m.summary, m.roleText, m.about, full]
+      ).filter(Boolean) as string[];
       // Quote the value — multi-word/expanded terms ("b2b saas", "a/b testing") contain
       // spaces & reserved chars that break PostgREST's unquoted .or() syntax.
       const ors = terms.flatMap((t) => cols.map((c) => `${c}.ilike."%${t}%"`)).join(",");
@@ -134,6 +179,15 @@ async function runSource(client: any, s: SrcCfg, query: StructuredQuery, terms: 
   try {
     // text tables (no role_family) NEED the keyword filter; family tables relax it if too few.
     let { data, error } = await build(true);
+    // The full-text column needs a GIN trigram index (supabase/trigram_indexes.sql) — without it
+    // an ILIKE '%x%' over 64k multi-KB rows blows the statement timeout. If that happens, retry on
+    // the small columns so the pool degrades to its old behaviour instead of silently vanishing.
+    if (error && m.full && !FULLTEXT_UNAVAILABLE.has(s.table)) {
+      FULLTEXT_UNAVAILABLE.add(s.table); // don't pay this timeout again on the next search
+      console.warn(`[src ${s.label}] full-text search on ${m.full} failed (${error.message.slice(0, 60)}) — falling back to summary columns. Run supabase/trigram_indexes.sql to enable full-text (measured 4–10x recall).`);
+      const r = await build(true, true);
+      data = r.data; error = r.error;
+    }
     // Fallback WITHOUT terms orders by yoe-desc = "the most experienced humans", unrelated to the
     // JD. Only acceptable when semantic is OFF (keyword is all we have). When semantic is ON, the
     // vector lane carries recall for thin-keyword JDs — so skip this noise entirely.
@@ -257,7 +311,10 @@ export const supabaseAdapter: SourceAdapter = {
       // expand query terms with domain synonyms so e.g. "experimentation" also pulls
       // a/b testing / feature-flags people, and "marketplace" pulls Uber/Swiggy/Flipkart.
       const expanded = expandTerms([...query.roles, ...query.keywords, ...query.skills, ...query.signals], 14);
-      const terms = Array.from(new Set(expanded.map(safe).filter((t) => t.length > 2))).slice(0, 10);
+      // Companies named in the JD are searched verbatim (never synonym-expanded) — now that the
+      // full-text column is in the OR, "Flipkart" hits anyone whose resume/career text mentions it.
+      const named = query.companies.map(safe).filter((t) => t.length > 2);
+      const terms = Array.from(new Set([...named, ...expanded.map(safe).filter((t) => t.length > 2)])).slice(0, 12);
 
       // keyword lane (all pools) + semantic lane (all pools) run together; merged below.
       const [batches, vectorPeople] = await Promise.all([

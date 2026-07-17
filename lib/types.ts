@@ -80,6 +80,7 @@ export interface StructuredQuery {
   locations: string[];
   india: boolean;                  // India-only?
   companyTier: string[];           // faang|unicorn|big4|tier1  (signals to require/boost)
+  companies: string[];             // specific companies named in the JD ("from Flipkart/PhonePe") — matched against the WHOLE career, not just current
   domains: string[];               // fintech|saas|ecommerce|edtech|quick_commerce|d2c|healthtech…
   compMinLpa: number | null;       // comp band (LPA)
   compMaxLpa: number | null;

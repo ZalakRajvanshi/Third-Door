@@ -68,6 +68,9 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
         yoe: d.years ?? null,
         seniority: d.seniority ?? null,
         tier: tierLabel(companyTier(p.company)), // our VERIFIED prestige — don't let the model guess
+        // PAST companies — "ex-Flipkart" is often the whole reason someone fits, and it's
+        // invisible from the current employer alone. Capped to keep the payload cheap.
+        past: p.experience.slice(1, 6).map((e) => e.company).filter(Boolean),
         domains: (d.domains ?? []).slice(0, 5),
         signals: (d.flags ?? []).slice(0, 6), // Ex-FAANG, Unicorn, IIT/IIM, Growth PM, ~35 LPA…
         summary: (p.summary ?? "").slice(0, 220),
@@ -85,6 +88,7 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
       q.yoeMin != null ? `${q.yoeMin}+ years experience` : null,
       q.yoeMax != null ? `at most ${q.yoeMax} years` : null,
       q.companyTier.length ? `pedigree: ${q.companyTier.join("/")} (Tier-1)` : null,
+      q.companies.length ? `target companies (current OR past counts): ${q.companies.join(", ")}` : null,
       q.domains.length ? `domain: ${q.domains.join("/")}` : null,
       q.skills.length ? `skills: ${q.skills.join(", ")}` : null,
       q.compMinLpa || q.compMaxLpa ? `comp ${q.compMinLpa ?? "?"}–${q.compMaxLpa ?? "?"} LPA` : null,
@@ -108,6 +112,10 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
             `(3) relevant skills & domain, (4) company quality, (5) seniority & career progression, ` +
             `(6) recency — recent relevant experience counts more than old. ` +
             `\nReward transferable experience even when titles differ. ` +
+            `\nCAREER, NOT JUST THE CURRENT JOB: each candidate has a "past" array of previous ` +
+            `employers. A relevant PAST stint (e.g. ex-Flipkart for a payments brief) is real ` +
+            `evidence — weigh it nearly as much as the current role, discounted for how long ago ` +
+            `it likely was. Never say a candidate lacks domain experience if "past" contradicts it. ` +
             `\nPEDIGREE: each candidate has a verified "tier" field (Tier-1/2/3) — TRUST IT. Never call a ` +
             `company Tier-1 unless its tier says so; don't infer prestige from the name yourself. ` +
             `\nSENIORITY: respect the real ladder (e.g. PM ladder: APM < PM < Senior PM < Group PM < ` +

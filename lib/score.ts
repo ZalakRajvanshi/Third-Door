@@ -5,19 +5,23 @@ import { prefBoost } from "@/lib/learning";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Stage-4 business score — a transparent, deterministic 0–100 that decides which
-// candidates are worth (token-costly) OpenAI ranking. Weighted exactly per spec:
-//   role 30 · skills 20 · experience 20 · industry 10 · company tier 10 · location 10
+// candidates are worth (token-costly) OpenAI ranking.
+//   role 22 · seniority 8 · skills 14 · experience 12 · career 34 · tier 8 · location 2
+// CAREER is now the heaviest signal (34 + 8 tier = 42/100, up from 20/100): who someone
+// has actually worked for — across their WHOLE career, not just the current job — predicts
+// fit far better than title keywords. Seniority is its own component scored on a real
+// ladder (it used to be a substring check against an always-null field).
 // Plus a mild recency factor (fresher data ranks slightly higher).
 // Fast (pure JS, no I/O), so we can score the whole retrieved pool every search.
 // ───────────────────────────────────────────────────────────────────────────
 
-const WEIGHTS = { role: 30, skills: 20, experience: 20, industry: 10, tier: 10, location: 10 };
+const WEIGHTS = { role: 22, seniority: 8, skills: 14, experience: 12, career: 34, tier: 8, location: 2 };
 
 const lc = (s: unknown) => String(s ?? "").toLowerCase();
 
 export interface ScoreBreakdown {
   total: number; // 0–100
-  role: number; skills: number; experience: number; industry: number; tier: number; location: number;
+  role: number; seniority: number; skills: number; experience: number; career: number; tier: number; location: number;
 }
 
 function dossier(p: Person) { return (p.dossier ?? {}) as any; }
@@ -42,9 +46,40 @@ function roleScore(p: Person, q: StructuredQuery): number {
   // 0.7, but a genuine title/keyword match (hits above) is what earns the top of the range.
   // Otherwise every PM scores identically on a PM search and the heaviest weight stops discriminating.
   if (q.roleFamilies.length && q.roleFamilies.some((f) => fam.includes(lc(f)) || hay.includes(lc(f).replace(/_/g, " ")))) s = Math.max(s, 0.7);
-  // seniority alignment
-  if (q.seniority.length && q.seniority.some((sv) => hay.includes(lc(sv)))) s = Math.min(1, s + 0.1);
   return Math.max(0, Math.min(1, s));
+}
+
+// One ladder for every pool. The vocabularies genuinely differ (binary: intern/junior/mid/
+// leadership; yc: adds lead/director/vp/c_level/founder) — per the data contract, unify before
+// comparing. Parallel rungs share a level (staff ≈ lead, leadership ≈ director).
+const LADDER: Record<string, number> = {
+  intern: 0, trainee: 0, junior: 1, entry: 1, associate: 1, mid: 2, senior: 3, sr: 3,
+  lead: 4, staff: 4, principal: 5, director: 6, leadership: 6, head: 6, vp: 7,
+  c_level: 8, cxo: 8, chief: 8, founder: 8,
+};
+const senRank = (s: unknown): number | null => {
+  const k = lc(s).trim().replace(/[\s-]+/g, "_");
+  return k in LADDER ? LADDER[k] : null;
+};
+
+/** Distance on the real seniority ladder. Under-levelled is worse than over-levelled:
+ *  a VP for a Senior brief is a stretch; a junior for a Senior brief is a miss. */
+function seniorityScore(p: Person, q: StructuredQuery): number {
+  if (!q.seniority.length) return 0.5;
+  const want = q.seniority.map(senRank).filter((n): n is number => n != null);
+  if (!want.length) return 0.5;
+  let cand = senRank(dossier(p).seniority);
+  if (cand == null) {
+    // fall back to title cues when the pool has no seniority value
+    const hay = `${lc(p.current_title)} ${lc(p.headline)}`;
+    for (const [k, v] of Object.entries(LADDER)) {
+      if (new RegExp(`\\b${k.replace(/_/g, " ")}\\b`).test(hay)) cand = Math.max(cand ?? 0, v);
+    }
+  }
+  if (cand == null) return 0.45; // genuinely unknown → mild neutral, never a hard miss
+  // closest requested rung; over-qualified counts at 60% of the distance
+  const dist = Math.min(...want.map((w) => (cand! >= w ? (cand! - w) * 0.6 : w - cand!)));
+  return dist === 0 ? 1 : dist <= 1 ? 0.78 : dist <= 2 ? 0.45 : 0.2;
 }
 
 function skillsScore(p: Person, q: StructuredQuery): number {
@@ -65,16 +100,49 @@ function experienceScore(p: Person, q: StructuredQuery): number {
   return 1; // within band / meets the floor
 }
 
-function industryScore(p: Person, q: StructuredQuery): number {
-  if (!q.domains.length) return 0.5;
-  // the company's real domains from companies_metadata are the strongest, cleanest signal
-  const coDomains = [p.company, ...p.experience.map((e) => e.company)]
-    .flatMap((c) => lookupCompany(c)?.domains ?? []).map(lc);
-  if (coDomains.length && q.domains.some((d) => coDomains.includes(lc(d)))) return 1;
-  // else fall back to text/dossier evidence
-  const want = q.domains.flatMap((d) => expandTerms([d], 8));
-  const hay = [lc(p.summary), lc(p.company), ...(dossier(p).domains ?? []).map(lc)].join(" ");
-  return q.domains.some((d) => want.some((w) => hay.includes(w)) || hay.includes(lc(d))) ? 1 : 0.2;
+const nrmCo = (c: unknown) => lc(c).replace(/[^a-z0-9]/g, "");
+
+/** Did they work at one of the companies the JD actually named — EVER, not just now? */
+function namedCompanyHit(p: Person, q: StructuredQuery): boolean {
+  if (!q.companies.length) return false;
+  const wanted = q.companies.map(nrmCo).filter((w) => w.length > 2);
+  if (!wanted.length) return false;
+  return [p.company, ...p.experience.map((e) => e.company)].filter(Boolean).some((c) => {
+    const n = nrmCo(c);
+    // "flipkart" matches "flipkartindiapvtltd"; guard the reverse so short names don't over-match
+    return wanted.some((w) => n.includes(w) || (n.length > 3 && w.includes(n)));
+  });
+}
+
+/**
+ * CAREER — the heaviest signal (34/100). Reads the WHOLE career graph, not just the current
+ * employer, which is the documented 4x lift: "ex-Flipkart payments" is invisible if you only
+ * look at where someone works today. Current beats past (recency), real company metadata beats
+ * text guessing.
+ */
+function careerScore(p: Person, q: StructuredQuery): number {
+  // 1. a company the JD explicitly named — the strongest possible evidence
+  if (namedCompanyHit(p, q)) return 1;
+  const askedCompanies = q.companies.length > 0;
+
+  if (q.domains.length) {
+    const want = q.domains.map(lc);
+    // 2. CURRENT company's real domains (companies_metadata) — cleanest, most recent signal
+    const cur = (lookupCompany(p.company)?.domains ?? []).map(lc);
+    if (cur.some((d) => want.includes(d))) return 1;
+    // 3. ANY past company in the domain — the 4x lift, discounted for recency
+    const past = p.experience.slice(1).flatMap((e) => lookupCompany(e.company)?.domains ?? []).map(lc);
+    if (past.some((d) => want.includes(d))) return 0.75;
+    // 4. text/dossier evidence (no company metadata match)
+    const expanded = q.domains.flatMap((d) => expandTerms([d], 8));
+    const hay = [lc(p.summary), lc(p.company), ...(dossier(p).domains ?? []).map(lc)].join(" ");
+    if (q.domains.some((d) => hay.includes(lc(d))) || expanded.some((w) => hay.includes(w))) return 0.5;
+    return 0.15; // asked for a domain, no evidence anywhere in the career
+  }
+
+  // no domain asked. If companies were named and none matched, that's a real miss.
+  if (askedCompanies) return 0.3;
+  return 0.5; // nothing company-ish asked → neutral
 }
 
 function tierScore(p: Person, q: StructuredQuery): number {
@@ -108,17 +176,19 @@ function recencyFactor(p: Person): number {
 export function businessScore(p: Person, q: StructuredQuery): ScoreBreakdown {
   const parts = {
     role: roleScore(p, q),
+    seniority: seniorityScore(p, q),
     skills: skillsScore(p, q),
     experience: experienceScore(p, q),
-    industry: industryScore(p, q),
+    career: careerScore(p, q),
     tier: tierScore(p, q),
     location: locationScore(p, q),
   };
   const raw =
     parts.role * WEIGHTS.role +
+    parts.seniority * WEIGHTS.seniority +
     parts.skills * WEIGHTS.skills +
     parts.experience * WEIGHTS.experience +
-    parts.industry * WEIGHTS.industry +
+    parts.career * WEIGHTS.career +
     parts.tier * WEIGHTS.tier +
     parts.location * WEIGHTS.location;
   // small completeness nudge so richer profiles edge ahead on ties

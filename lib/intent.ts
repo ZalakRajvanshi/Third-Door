@@ -48,7 +48,7 @@ export function heuristicQuery(raw: string): StructuredQuery {
     raw, roles: [], roleFamilies: families, seniority: inferSeniority([], yoeMin, raw),
     yoeMin, yoeMax: null,
     locations: [], india: /india|bengaluru|bangalore|mumbai|delhi|pune|chennai|hyderabad|gurgaon|gurugram|noida/.test(t),
-    companyTier: tier, domains: [], compMinLpa: null, compMaxLpa: null, signals: [], skills: [],
+    companyTier: tier, companies: [], domains: [], compMinLpa: null, compMaxLpa: null, signals: [], skills: [],
     keywords: t.replace(/[^a-z0-9+ ]/g, " ").split(/\s+/).filter((w) => w.length > 2).slice(0, 8),
     hypotheses: [raw], mustHave: [], niceToHave: [], wantCount: extractCount(t),
   };
@@ -78,6 +78,7 @@ export async function parseIntent(raw: string): Promise<StructuredQuery> {
             `india: boolean (true if India / an Indian city is implied).\n` +
             `locations: array of city names mentioned.\n` +
             `companyTier: array subset of ["tier1","faang","unicorn","big4"] — ONLY when the request explicitly names pedigree (Tier-1, top/marquee company, FAANG/MAANG, unicorn, Big 4). "startup" / "worked at a startup" is NOT a tier — leave companyTier empty and instead consider signals. Default to [].\n` +
+            `companies: array of SPECIFIC company names the request names as a source/target of candidates (e.g. "from Flipkart, PhonePe or Razorpay", "ex-Swiggy"). Bare company names only ("Flipkart", not "Flipkart India Pvt Ltd"). Do NOT include the hiring company itself, and do NOT invent examples — [] if none are named.\n` +
             `domains: array of industry tags mentioned (e.g. fintech, payments, lending, saas, b2b, ecommerce, d2c, quick_commerce, edtech, healthtech, consumer, marketplace, ai).\n` +
             `compMinLpa / compMaxLpa: number or null (LPA, e.g. "30-40 LPA").\n` +
             `signals: array of [growth_pm, ai_pm, zero_to_one, founder, international, consulting, iit_iim, pnl_ownership] if implied.\n` +
@@ -104,6 +105,7 @@ export async function parseIntent(raw: string): Promise<StructuredQuery> {
       locations: arr(p.locations),
       india: p.india === true || arr(p.locations).length > 0,
       companyTier: arr(p.companyTier),
+      companies: arr(p.companies).slice(0, 12),
       domains: arr(p.domains).map((d) => d.toLowerCase()),
       compMinLpa: typeof p.compMinLpa === "number" ? p.compMinLpa : null,
       compMaxLpa: typeof p.compMaxLpa === "number" ? p.compMaxLpa : null,
