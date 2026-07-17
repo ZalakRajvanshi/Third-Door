@@ -1,6 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 import type { Person, SourceAdapter, StructuredQuery } from "@/lib/types";
-import { SEED_PEOPLE } from "./seed";
 import { expandTerms, meetsTier, cityVariants } from "@/lib/knowledge";
 import { embedMany, hasEmbeddings } from "@/lib/ai";
 import { COST } from "@/lib/config";
@@ -247,15 +246,12 @@ async function attachFacets(client: any, people: Person[]): Promise<void> {
   }));
 }
 
-function seedFallback(query: StructuredQuery): Person[] {
-  const terms = [...query.roles, ...query.keywords, ...query.skills].map((t) => t.toLowerCase());
-  return SEED_PEOPLE.filter((p) => !terms.length || terms.some((t) => [p.name, p.headline, p.current_title, p.company, ...p.skills].join(" ").toLowerCase().includes(t)));
-}
-
 export const supabaseAdapter: SourceAdapter = {
   name: "supabase",
   async search(query: StructuredQuery): Promise<Person[]> {
-    if (!hasSupabase) return seedFallback(query);
+    // Fail loudly, never fabricate. A recruiter must never be shown invented candidates:
+    // a misconfiguration or an outage has to surface as an error, not as fake profiles.
+    if (!hasSupabase) throw new Error("Supabase not configured (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SECRET_KEY)");
     try {
       const client = db();
       // expand query terms with domain synonyms so e.g. "experimentation" also pulls
@@ -297,15 +293,17 @@ export const supabaseAdapter: SourceAdapter = {
       }
       return people;
     } catch (e) {
-      console.error("[supabase] search error, seed fallback:", e);
-      return seedFallback(query);
+      // Surface the failure — the API turns this into an honest "Search failed" rather than
+      // silently returning an empty/fake list that reads as "no such candidates exist".
+      console.error("[supabase] search failed:", e);
+      throw e;
     }
   },
 };
 
 /** Fetch one person (id = "source:slug") for the detail page. */
 export async function getPersonById(id: string): Promise<Person | null> {
-  if (!hasSupabase) return SEED_PEOPLE.find((p) => p.id === id) ?? null;
+  if (!hasSupabase) return null;
   try {
     const [label, ...rest] = id.split(":");
     const slug = rest.join(":");

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Bookmark, MapPin, Building2, GraduationCap, Award, Check, AlertCircle, ExternalLink, FileText } from "lucide-react";
 import { MatchMeter } from "./MatchMeter";
 import { useStore, logFeedback } from "@/lib/store";
-import type { RankedPerson, Dossier } from "./types";
+import type { RankedPerson, Dossier } from "@/lib/types";
 
 function initials(name: string) { return name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase(); }
 

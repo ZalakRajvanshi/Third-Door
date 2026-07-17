@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import type { RankedPerson } from "@/components/types";
+import type { RankedPerson } from "@/lib/types";
 
 interface Store {
   items: RankedPerson[];

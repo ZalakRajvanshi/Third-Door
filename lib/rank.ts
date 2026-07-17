@@ -1,7 +1,7 @@
 import type { Person, RankedPerson, StructuredQuery } from "@/lib/types";
 import { callAI, hasLLM, extractJson } from "@/lib/ai";
 import { companyTier } from "@/lib/knowledge";
-import { relevantLearnings } from "@/lib/learnings";
+import { relevantNotes } from "@/lib/learning";
 
 const tierLabel = (t: string) => (t === "tier1" ? "Tier-1" : t === "tier2" ? "Tier-2" : "Tier-3");
 
@@ -93,7 +93,7 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
     ].filter(Boolean).join(" · ");
 
     // real recruiter notes for this specific role/company, if any (human calibration)
-    const learnings = relevantLearnings(q.embedText || q.raw);
+    const learnings = relevantNotes(q.embedText || q.raw);
 
     const text = await callAI(
       [

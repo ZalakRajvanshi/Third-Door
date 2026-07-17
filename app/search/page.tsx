@@ -6,7 +6,7 @@ import { ArrowRight, SlidersHorizontal, ChevronLeft, FileText, Upload, Loader2 }
 import { MatchMeter } from "@/components/MatchMeter";
 import { CandidateDetail } from "@/components/CandidateDetail";
 import { cacheResults, logFeedback, readPendingSearch, setPendingSearch, type PendingSearch } from "@/lib/store";
-import type { RankedPerson } from "@/components/types";
+import type { RankedPerson } from "@/lib/types";
 
 function initials(name: string) { return name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase(); }
 const prettyRole = (f: string) => f.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());

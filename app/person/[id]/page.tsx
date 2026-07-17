@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import { CandidateDetail } from "@/components/CandidateDetail";
 import { readCachedPerson } from "@/lib/store";
-import type { RankedPerson } from "@/components/types";
+import type { RankedPerson } from "@/lib/types";
 
 export default function PersonPage({ params }: { params: { id: string } }) {
   const { id } = params;

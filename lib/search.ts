@@ -5,8 +5,7 @@ import { parseIntent, heuristicQuery } from "@/lib/intent";
 import { rankPeople } from "@/lib/rank";
 import { preRank, businessScore, matchesFunction } from "@/lib/score";
 import { ensureCompanies } from "@/lib/companies";
-import { ensurePreferences } from "@/lib/learning";
-import { ensureLearnings } from "@/lib/learnings";
+import { ensurePreferences, ensureNotes } from "@/lib/learning";
 import { COST } from "@/lib/config";
 import { cacheKey, cacheGet, cacheSet, singleFlight } from "@/lib/cache";
 
@@ -125,7 +124,7 @@ export async function runSearch(input: string | SearchInput): Promise<SearchResu
     const lap: Record<string, number> = {};
     const mark = (name: string, from: number) => { lap[name] = Date.now() - from; };
 
-    const companiesReady = Promise.all([ensureCompanies(), ensurePreferences(), ensureLearnings()]); // context + learned prefs + notes
+    const companiesReady = Promise.all([ensureCompanies(), ensurePreferences(), ensureNotes()]); // context + learned prefs + notes
 
     let s = Date.now();
     const query = await parseIntent(intentText);
@@ -225,7 +224,7 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
     if (top.length) emit({ type: "preliminary", results: top, query: { ...hq, raw: displayBrief } });
   } catch (e) { console.error("[progressive] preview failed:", e); }
 
-  await Promise.all([ensureCompanies(), ensurePreferences(), ensureLearnings()]); // full context for the final
+  await Promise.all([ensureCompanies(), ensurePreferences(), ensureNotes()]); // full context for the final
 
   // ── FINAL: real intent → retrieve(+semantic) → AI rank ──
   try {

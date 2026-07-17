@@ -28,6 +28,27 @@ export interface SourceRef {
   trust: number; // 0–1
 }
 
+/** The structured profile detail the UI renders. Typed (not `unknown`) so scoring/ranking
+ *  read real fields instead of `as any` — an untyped dossier is how the `seniority` field
+ *  silently stayed null everywhere. */
+export interface Dossier {
+  years: number | null;
+  seniority: string | null;
+  roleFamily?: string | null; // role_family enum (binary/yc) or title_role/inferred_role (luma/ext/apify)
+  overview: string | null; // career arc summary
+  tagline: string | null; // one-liner / search summary
+  bestFor: string[];
+  notFor: string[];
+  products: { name: string; impact?: string; description?: string }[];
+  roles: { title: string; company: string; years?: string; metric?: string }[];
+  scale: string | null;
+  skills: string[];
+  tools: string[];
+  domains: string[];
+  education: { degree?: string; field?: string; institution: string; year?: string | number }[];
+  flags: string[];
+}
+
 /** The single unified shape every profile is normalized into before the UI. */
 export interface Person {
   id: string;
@@ -45,7 +66,7 @@ export interface Person {
   confidence_score: number; // 0–100 (sure this is one real person)
   last_updated: string; // ISO
   _sources: SourceRef[]; // internal only
-  dossier?: unknown; // structured parsed_json for the UI (see components/types Dossier)
+  dossier?: Dossier; // structured detail for the UI + scoring
 }
 
 /** Parsed intent + search strategies produced by the Intent Engine (v2). */
