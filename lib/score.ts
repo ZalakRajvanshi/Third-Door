@@ -68,14 +68,18 @@ function seniorityScore(p: Person, q: StructuredQuery): number {
   if (!q.seniority.length) return 0.5;
   const want = q.seniority.map(senRank).filter((n): n is number => n != null);
   if (!want.length) return 0.5;
-  let cand = senRank(dossier(p).seniority);
-  if (cand == null) {
-    // fall back to title cues when the pool has no seniority value
-    const hay = `${lc(p.current_title)} ${lc(p.headline)}`;
-    for (const [k, v] of Object.entries(LADDER)) {
-      if (new RegExp(`\\b${k.replace(/_/g, " ")}\\b`).test(hay)) cand = Math.max(cand ?? 0, v);
-    }
+  // Take the HIGHER of the stored value and the title. Measured: 28% of senior/lead/principal-
+  // titled people carry seniority_level junior/intern/mid (e.g. a 9-yr "Lead PM — UPI" stored as
+  // "mid"). Some of that is the enrichment discounting title inflation, which is fair — but
+  // under-levelling a real lead is worse, and yoe is scored separately (experienceScore), so an
+  // inflated title without the years still can't sneak through.
+  const stored = senRank(dossier(p).seniority);
+  let titled: number | null = null;
+  const hay = `${lc(p.current_title)} ${lc(p.headline)}`;
+  for (const [k, v] of Object.entries(LADDER)) {
+    if (new RegExp(`\\b${k.replace(/_/g, " ")}\\b`).test(hay)) titled = Math.max(titled ?? 0, v);
   }
+  const cand = stored == null ? titled : titled == null ? stored : Math.max(stored, titled);
   if (cand == null) return 0.45; // genuinely unknown → mild neutral, never a hard miss
   // closest requested rung; over-qualified counts at 60% of the distance
   const dist = Math.min(...want.map((w) => (cand! >= w ? (cand! - w) * 0.6 : w - cand!)));
@@ -121,37 +125,51 @@ function namedCompanyHit(p: Person, q: StructuredQuery): boolean {
  * text guessing.
  */
 function careerScore(p: Person, q: StructuredQuery): number {
-  // 1. a company the JD explicitly named — the strongest possible evidence
-  if (namedCompanyHit(p, q)) return 1;
-  const askedCompanies = q.companies.length > 0;
+  const named = namedCompanyHit(p, q);
 
   if (q.domains.length) {
     const want = q.domains.map(lc);
-    // 2. CURRENT company's real domains (companies_metadata) — cleanest, most recent signal
+    // CURRENT company's real domains (companies_metadata) — cleanest, most recent signal
     const cur = (lookupCompany(p.company)?.domains ?? []).map(lc);
-    if (cur.some((d) => want.includes(d))) return 1;
-    // 3. ANY past company in the domain — the 4x lift, discounted for recency
+    const curHit = cur.some((d) => want.includes(d));
+    // ANY past company in the domain — the 4x lift, discounted for recency
     const past = p.experience.slice(1).flatMap((e) => lookupCompany(e.company)?.domains ?? []).map(lc);
-    if (past.some((d) => want.includes(d))) return 0.75;
-    // 4. text/dossier evidence (no company metadata match)
+    const pastHit = past.some((d) => want.includes(d));
+    // text/dossier evidence (no company metadata match)
     const expanded = q.domains.flatMap((d) => expandTerms([d], 8));
     const hay = [lc(p.summary), lc(p.company), ...(dossier(p).domains ?? []).map(lc)].join(" ");
-    if (q.domains.some((d) => hay.includes(lc(d))) || expanded.some((w) => hay.includes(w))) return 0.5;
-    return 0.15; // asked for a domain, no evidence anywhere in the career
+    const textHit = q.domains.some((d) => hay.includes(lc(d))) || expanded.some((w) => hay.includes(w));
+
+    let s = curHit ? 0.95 : pastHit ? 0.75 : textHit ? 0.5 : 0.15;
+    // A named company must NOT override the domain: a JD saying "payments, ideally from
+    // Flipkart" is not satisfied by a Flipkart PM who did Assets & Inventory. Being at a named
+    // company is a floor (real evidence), not a free pass — the domain still decides the top.
+    if (named) s = Math.max(s, 0.7);
+    if (named && (curHit || pastHit)) s = 1; // named company AND the right domain = best signal
+    return s;
   }
 
-  // no domain asked. If companies were named and none matched, that's a real miss.
-  if (askedCompanies) return 0.3;
+  if (named) return 1; // companies named, no domain asked → they're exactly who was requested
+  if (q.companies.length) return 0.3; // companies named and none matched — a real miss
   return 0.5; // nothing company-ish asked → neutral
 }
 
 function tierScore(p: Person, q: StructuredQuery): number {
   const cos = companies(p);
+  const tiers = cos.map(companyTier);
   const wantTier1 = q.companyTier.some((t) => /tier_?1|faang|unicorn|big4/i.test(t));
-  if (q.companyTier.length) return meetsTier(cos, wantTier1) ? 1 : 0.15; // pedigree explicitly required
+  if (q.companyTier.length) {
+    if (meetsTier(cos, wantTier1)) return 1; // pedigree explicitly required, and met
+    // Every company they've worked at is unknown to us. That's OUR data gap, not their flaw —
+    // score it uncertain rather than disqualifying (a real Tier-3 still gets the 0.15).
+    if (tiers.length && tiers.every((t) => t === "unknown")) return 0.35;
+    return 0.15;
+  }
   // not requested → reward actual quality mildly so blue-chips edge ahead, but don't dominate
-  const best = cos.map(companyTier);
-  return best.includes("tier1") ? 0.7 : best.includes("tier2") ? 0.55 : 0.45;
+  if (tiers.includes("tier1")) return 0.7;
+  if (tiers.includes("tier2")) return 0.55;
+  if (tiers.includes("tier3")) return 0.45;
+  return 0.5; // nothing known → neutral, never a penalty
 }
 
 function locationScore(p: Person, q: StructuredQuery): number {

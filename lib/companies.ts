@@ -10,7 +10,10 @@ import { createClient } from "@supabase/supabase-js";
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SECRET_KEY;
 
-export type Tier = "tier1" | "tier2" | "tier3";
+/** "unknown" is NOT a low tier — it means we have no pedigree data for this company.
+ *  Collapsing the two made us report "Tier-3 Bajaj Finserv" / "Angel One (Tier-3)" as fact
+ *  and penalise the candidate for our own missing data. Absence of evidence ≠ evidence of absence. */
+export type Tier = "tier1" | "tier2" | "tier3" | "unknown";
 
 export interface CompanyInfo {
   name: string;
@@ -27,10 +30,14 @@ const SUFFIX = /\b(pvt|private|ltd|limited|inc|incorporated|llp|llc|technologies
 
 function deriveTier(r: any): Tier {
   if (r.is_faang || r.is_unicorn || r.is_big4 || r.is_consulting) return "tier1";
+  if (r.is_bank || r.is_nbfc) return "tier2";
+  // brand_strength_score === null means the row was never enriched (78 rows — and they're big
+  // names: Bajaj Finance, Angel One, Aditya Birla Capital). Don't invent a tier for them.
+  if (r.brand_strength_score === null || r.brand_strength_score === undefined) return "unknown";
   const bs = Number(r.brand_strength_score) || 0;
   if (bs >= 60) return "tier1";
-  if (bs >= 35 || r.is_bank || r.is_nbfc) return "tier2";
-  return "tier3";
+  if (bs >= 35) return "tier2";
+  return "tier3"; // genuinely enriched AND low brand — a real Tier-3
 }
 
 function deriveDomains(r: any): string[] {

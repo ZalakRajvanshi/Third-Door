@@ -50,14 +50,20 @@ const SOURCES: SrcCfg[] = [
     label: "luma", table: "luma_profiles", limit: 80,
     sel: "full_name,designation,company,city_canonical,is_india,total_experience_years,title_seniority,title_role,inferred_role,domains_worked,career_summary,linkedin_slug,highest_company_tier,has_big_tech_exp,has_consulting_exp,has_startup_exp,all_companies_worked",
     m: { name: "full_name", title: "designation", company: "company", city: "city_canonical", india: "is_india", yoe: "total_experience_years", roleText: "title_role", domains: "domains_worked", slug: "linkedin_slug", summary: "career_summary", full: "searchable_text", fullIsSuperset: true, sen: "title_seniority", allCos: "all_companies_worked" },
-    flags: (r) => [r.has_big_tech_exp && "Big tech", r.has_consulting_exp && "Ex-consulting", r.has_startup_exp && "Startup", r.highest_company_tier && `Tier: ${r.highest_company_tier}`].filter(Boolean) as string[],
+    // Only surface highest_company_tier when it's a POSITIVE signal. Passing it through raw
+    // leaked "Tier: tier3" into the UI and the reasons — a second, conflicting tier taxonomy
+    // asserting a low tier we haven't verified. Positive signals only; our companyTier() rules.
+    flags: (r) => [r.has_big_tech_exp && "Big tech", r.has_consulting_exp && "Ex-consulting", r.has_startup_exp && "Startup", ["tier1", "tier_1", "faang", "unicorn"].includes(String(r.highest_company_tier).toLowerCase()) && "Tier-1 background"].filter(Boolean) as string[],
     tier1: (r) => !!(r.has_big_tech_exp || ["tier1", "faang", "unicorn", "tier_1"].includes(String(r.highest_company_tier).toLowerCase())),
   },
   {
     label: "yc", table: "yc_employees", limit: 60,
     sel: "full_name,current_title,current_company_name,city_canonical,is_india,total_experience_years,title_seniority,role_family,inferred_role,domains_worked,career_summary,linkedin_slug,highest_company_tier,has_big_tech_exp,has_consulting_exp,has_startup_exp,all_companies_worked",
     m: { name: "full_name", title: "current_title", company: "current_company_name", city: "city_canonical", india: "is_india", yoe: "total_experience_years", roleFamily: "role_family", domains: "domains_worked", slug: "linkedin_slug", summary: "career_summary", full: "searchable_text", fullIsSuperset: true, sen: "title_seniority", allCos: "all_companies_worked" },
-    flags: (r) => [r.has_big_tech_exp && "Big tech", r.has_consulting_exp && "Ex-consulting", r.has_startup_exp && "Startup", r.highest_company_tier && `Tier: ${r.highest_company_tier}`].filter(Boolean) as string[],
+    // Only surface highest_company_tier when it's a POSITIVE signal. Passing it through raw
+    // leaked "Tier: tier3" into the UI and the reasons — a second, conflicting tier taxonomy
+    // asserting a low tier we haven't verified. Positive signals only; our companyTier() rules.
+    flags: (r) => [r.has_big_tech_exp && "Big tech", r.has_consulting_exp && "Ex-consulting", r.has_startup_exp && "Startup", ["tier1", "tier_1", "faang", "unicorn"].includes(String(r.highest_company_tier).toLowerCase()) && "Tier-1 background"].filter(Boolean) as string[],
     tier1: (r) => !!(r.has_big_tech_exp || ["tier1", "faang", "unicorn", "tier_1"].includes(String(r.highest_company_tier).toLowerCase())),
   },
   {

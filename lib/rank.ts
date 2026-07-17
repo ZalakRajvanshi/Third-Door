@@ -3,7 +3,10 @@ import { callAI, hasLLM, extractJson } from "@/lib/ai";
 import { companyTier } from "@/lib/knowledge";
 import { relevantNotes } from "@/lib/learning";
 
-const tierLabel = (t: string) => (t === "tier1" ? "Tier-1" : t === "tier2" ? "Tier-2" : "Tier-3");
+// "Unrated" ≠ Tier-3. We have no pedigree data for that company (it's absent from
+// companies_metadata or the row was never enriched — Bajaj Finance, Angel One et al).
+// Saying "Tier-3" there is a false statement the model then repeats to the recruiter.
+const tierLabel = (t: string) => (t === "tier1" ? "Tier-1" : t === "tier2" ? "Tier-2" : t === "tier3" ? "Tier-3" : "Unrated");
 
 // Ranking Engine (the heart): for each person → match score + why + concerns.
 // LLM-powered when a key exists; deterministic heuristic otherwise.
@@ -37,7 +40,7 @@ function heuristicRank(person: Person, q: StructuredQuery): RankedPerson {
   if (person.current_title && person.company) bits.push(`${person.current_title} at ${person.company}`);
   else if (person.current_title) bits.push(person.current_title);
   const tier = companyTier(person.company);
-  if (tier !== "tier3") bits.push(tierLabel(tier));
+  if (tier === "tier1" || tier === "tier2") bits.push(tierLabel(tier)); // never assert a tier we don't have
   if (Array.isArray(d.flags) && d.flags[0] && !bits.some((b) => b.includes(d.flags[0]))) bits.push(d.flags[0]);
   const why = bits.length ? [bits.join(" · ")] : [`${person.current_title ?? "Candidate"} — overlaps with the brief.`];
 
@@ -116,8 +119,12 @@ export async function rankPeople(people: Person[], q: StructuredQuery): Promise<
             `employers. A relevant PAST stint (e.g. ex-Flipkart for a payments brief) is real ` +
             `evidence — weigh it nearly as much as the current role, discounted for how long ago ` +
             `it likely was. Never say a candidate lacks domain experience if "past" contradicts it. ` +
-            `\nPEDIGREE: each candidate has a verified "tier" field (Tier-1/2/3) — TRUST IT. Never call a ` +
-            `company Tier-1 unless its tier says so; don't infer prestige from the name yourself. ` +
+            `\nPEDIGREE: each candidate has a verified "tier" field — TRUST IT. Never call a company ` +
+            `Tier-1 unless its tier says so; don't infer prestige from the name yourself. ` +
+            `"Unrated" means we simply have NO pedigree data for that company — it does NOT mean low ` +
+            `pedigree. For Unrated, judge on the other evidence and never state or imply a tier for ` +
+            `them (do not call them Tier-3, and do not list "no Tier-1 pedigree" as a concern unless ` +
+            `the brief explicitly demanded pedigree). ` +
             `\nSENIORITY: respect the real ladder (e.g. PM ladder: APM < PM < Senior PM < Group PM < ` +
             `Director/Head < VP < CPO; mirror the equivalent for eng, design, marketing, data, etc.). ` +
             `\nFUNCTION: a brief for one function is NOT satisfied by another — a "product designer" search ` +

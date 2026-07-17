@@ -36,21 +36,25 @@ const TIER2 = [
   "thoughtworks", "publicis sapient", "epam", "globant", "mu sigma", "fractal", "tiger analytics",
 ];
 
-export type Tier = "tier1" | "tier2" | "tier3";
+export type Tier = "tier1" | "tier2" | "tier3" | "unknown";
 
 /** Classify a company by prestige. Prefers the enriched companies_metadata (5.9k companies),
- *  falls back to the hardcoded lists when a company isn't in the dataset. */
+ *  falls back to the hardcoded lists when a company isn't in the dataset.
+ *  Returns "unknown" when we genuinely have no data — never a silent "tier3". */
 export function companyTier(name: string | null | undefined): Tier {
-  if (!name) return "tier3";
+  if (!name) return "unknown";
   const info = lookupCompany(name); // real data first (tier/brand-strength/flags)
-  if (info) return info.tier;
+  // an un-enriched row still lets the hardcoded list have a say before we give up
+  if (info && info.tier !== "unknown") return info.tier;
   const n = norm(name);
   if (TIER1.some((c) => n.includes(c))) return "tier1";
   if (TIER2.some((c) => n.includes(c))) return "tier2";
-  return "tier3";
+  return "unknown"; // not in the data and not a known name — we don't know, so don't guess
 }
 
-/** Does this person's background satisfy a requested pedigree (tier1 / tier2+)? */
+/** Does this person's background satisfy a requested pedigree (tier1 / tier2+)?
+ *  "unknown" never satisfies a pedigree ask — but it isn't treated as a failure either
+ *  (see tierScore, which scores unknown as uncertain rather than disqualifying). */
 export function meetsTier(companies: string[], wantTier1: boolean): boolean {
   const tiers = companies.map(companyTier);
   if (wantTier1) return tiers.includes("tier1");
