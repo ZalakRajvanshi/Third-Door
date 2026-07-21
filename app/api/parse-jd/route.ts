@@ -27,11 +27,13 @@ export async function POST(req: NextRequest) {
     let text = "";
 
     if (name.endsWith(".pdf") || blob.type === "application/pdf") {
-      const { PDFParse } = await import("pdf-parse");
-      const parser = new PDFParse({ data: new Uint8Array(buf) });
-      const res = await parser.getText();
-      text = res?.text ?? "";
-      await parser.destroy?.();
+      // unpdf ships a serverless build of pdfjs with fonts/cmaps bundled, so it works on Vercel.
+      // pdf-parse (via pdfjs-dist) threw at runtime there — it needs external files Vercel's
+      // bundler doesn't trace — which is why PDF upload 500'd in prod while TXT/DOCX worked.
+      const { extractText, getDocumentProxy } = await import("unpdf");
+      const pdf = await getDocumentProxy(new Uint8Array(buf));
+      const res = await extractText(pdf, { mergePages: true });
+      text = Array.isArray(res.text) ? res.text.join("\n") : res.text ?? "";
     } else if (name.endsWith(".docx") || blob.type.includes("officedocument.wordprocessing")) {
       const mammoth = await import("mammoth");
       const res = await mammoth.extractRawText({ buffer: buf });

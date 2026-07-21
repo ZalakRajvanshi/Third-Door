@@ -1,9 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Don't let webpack bundle the JD parsers — pdfjs-dist (inside pdf-parse) breaks when
-  // bundled ("Object.defineProperty called on non-object"). Require them natively at runtime.
+  // Keep the JD parsers out of the webpack bundle. mammoth (DOCX) must be external.
+  // unpdf (PDF) ships its own serverless pdfjs build and works either way; listing it is safe.
   experimental: {
-    serverComponentsExternalPackages: ["pdf-parse", "pdfjs-dist", "mammoth"],
+    serverComponentsExternalPackages: ["unpdf", "mammoth"],
   },
 };
 export default nextConfig;
