@@ -51,6 +51,28 @@ function trim(ranked: RankedPerson[]): RankedPerson[] {
  *            never junk. This is how a search with lots of good data shows depth.
  * Honors an explicit count (query.wantCount); otherwise shows all relevant up to a cap.
  */
+const normCo = (c: string | null | undefined) => (c ?? "").toLowerCase().replace(/\s+(pvt|private|ltd|limited|inc|india|technologies|technology|software|solutions).*$/g, "").replace(/[^a-z0-9]/g, "").trim();
+
+/** Spread the visible list across companies. Individually-relevant results still read as
+ *  low-quality when the top is "PayPal, PayPal, PayPal" — a recruiter wants a curated slate,
+ *  not three people from one company. So cap each company at 2 in the shown region and demote
+ *  the rest (never drop them). EXCEPTION: a company the JD explicitly named is uncapped — if
+ *  the ask was "from Razorpay", show all the Razorpay people. */
+function diversify(list: RankedPerson[], q: StructuredQuery): RankedPerson[] {
+  const CAP = 2;
+  const named = new Set(q.companies.map(normCo).filter(Boolean));
+  const kept: RankedPerson[] = [], demoted: RankedPerson[] = [];
+  const count = new Map<string, number>();
+  for (const r of list) {
+    const co = normCo(r.person.company);
+    if (!co || named.has(co) || !r.vetted) { kept.push(r); continue; } // uncapped: named cos, and the tail
+    const n = count.get(co) ?? 0;
+    count.set(co, n + 1);
+    (n < CAP ? kept : demoted).push(r);
+  }
+  return [...kept, ...demoted];
+}
+
 function assemble(preRanked: Person[], aiRanked: RankedPerson[], q: StructuredQuery): RankedPerson[] {
   const vetted = trim(aiRanked).map((r) => ({ ...r, vetted: true }));
   const seenByAi = new Set(aiRanked.map((r) => r.person.id)); // everyone the AI scored (incl. trimmed)
@@ -64,7 +86,7 @@ function assemble(preRanked: Person[], aiRanked: RankedPerson[], q: StructuredQu
   // right-function depth, while niche searches keep their tail. Never drops cross-function people.
   const onFn = q.roleFamilies.length ? tailAll.filter((r) => matchesFunction(r.person, q)) : tailAll;
   const offFn = q.roleFamilies.length ? tailAll.filter((r) => !matchesFunction(r.person, q)) : [];
-  const all = [...vetted, ...onFn, ...offFn];
+  const all = diversify([...vetted, ...onFn, ...offFn], q); // spread the top across companies
   const limit = q.wantCount && q.wantCount > 0 ? q.wantCount : COST.MAX_TOTAL_SHOWN;
   return all.slice(0, limit);
 }
