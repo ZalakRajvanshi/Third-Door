@@ -101,6 +101,7 @@ export interface StructuredQuery {
   mustHave: string[];              // hard requirements the candidate MUST satisfy
   niceToHave: string[];            // bonus signals that lift but aren't required
   embedText?: string;              // full text used for semantic embedding (the JD, when present)
+  emphasis?: string;               // the recruiter's refinement NOTE + role context — a full-weight semantic angle so a note like "from fintech companies" actually pulls those people in, not just filters
   wantCount?: number | null;       // how many profiles the user explicitly asked for (null = dynamic)
   wantFresh?: boolean;             // recruiter explicitly asked for NEW/fresh profiles → allow the paid external source
 }

@@ -246,13 +246,17 @@ async function fetchBySlugs(client: any, s: SrcCfg, slugs: string[]): Promise<Pe
 
 async function vectorLane(client: any, query: StructuredQuery): Promise<Person[]> {
   if (!COST.SEARCH_SEMANTIC || !hasEmbeddings) return [];
-  // MULTI-PERSONA: search the JD itself AND each persona "bet" (direct / adjacent /
-  // proven-scaler / pedigree). A candidate strong on ANY angle surfaces — like a
-  // recruiter chasing several theories at once. Union by best similarity across angles.
-  const texts = [query.embedText || query.raw, ...(query.hypotheses ?? []).slice(0, 3)]
-    .map((t) => (t ?? "").trim()).filter((t) => t.length > 4);
+  // MULTI-ANGLE: search the JD, the recruiter's refinement NOTE (full weight — it's an explicit
+  // steer, not a guess), AND each persona "bet" (adjacent / proven-scaler / pedigree). A candidate
+  // strong on ANY angle surfaces. Union by best similarity across angles.
+  //   primary angles (JD + note) → wide pull, low floor;  persona bets → narrower, higher floor.
+  const angles: { text: string; primary: boolean }[] = [
+    { text: query.embedText || query.raw, primary: true },
+    ...(query.emphasis ? [{ text: query.emphasis, primary: true }] : []),
+    ...(query.hypotheses ?? []).slice(0, 3).map((h) => ({ text: h, primary: false })),
+  ].map((a) => ({ ...a, text: (a.text ?? "").trim() })).filter((a) => a.text.length > 4);
   let vecs: number[][];
-  try { vecs = await embedMany(texts); } catch (e) { console.error("[vec] embed failed:", e); return []; }
+  try { vecs = await embedMany(angles.map((a) => a.text)); } catch (e) { console.error("[vec] embed failed:", e); return []; }
   if (!vecs.length) return [];
 
   const perPool = await Promise.all(
@@ -261,10 +265,12 @@ async function vectorLane(client: any, query: StructuredQuery): Promise<Person[]
       if (!v) return [];
       const simBySlug = new Map<string, number>();
       await Promise.all(vecs.map(async (qvec, vi) => {
-        // primary = the JD itself (trust it more); persona bets are speculative → higher floor
-        const floor = vi === 0 ? COST.VECTOR_MIN_SIM : COST.VECTOR_MIN_SIM + 0.06;
+        // primary angles (JD + recruiter note) get the wide pull and low floor; persona bets are
+        // speculative → narrower pull, higher floor.
+        const primary = angles[vi]?.primary;
+        const floor = primary ? COST.VECTOR_MIN_SIM : COST.VECTOR_MIN_SIM + 0.06;
         // relax the DB min_years pre-filter by 2 — near-misses should surface (scored down), not vanish
-        const params: Record<string, unknown> = { query_embedding: qvec, match_count: vi === 0 ? COST.VECTOR_MATCH_COUNT : COST.VECTOR_PERSONA_COUNT };
+        const params: Record<string, unknown> = { query_embedding: qvec, match_count: primary ? COST.VECTOR_MATCH_COUNT : COST.VECTOR_PERSONA_COUNT };
         if (v.filt) { params.only_india = !!query.india; if (query.yoeMin != null) params.min_years = Math.max(0, query.yoeMin - 2); }
         try {
           const { data, error } = await client.rpc(v.fn, params);

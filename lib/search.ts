@@ -88,6 +88,18 @@ function shapeInput(input: string | SearchInput) {
 
 const prettyFamily = (f: string) => f.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+/** The recruiter's refinement note, embedded WITH role context so it steers retrieval toward
+ *  the right people. "from fintech companies" alone is role-blind (pulls any fintech person);
+ *  "from fintech companies. Senior Product Manager, payments" pulls the right ones. Returns
+ *  undefined when there's no note, so nothing changes for a plain JD search. */
+function emphasisText(q: StructuredQuery, note: string): string | undefined {
+  const n = note.trim();
+  if (!n) return undefined;
+  const role = q.roles[0] || q.roleFamilies.map(prettyFamily).join(" / ");
+  const ctx = [role, q.domains.slice(0, 3).join(" "), q.locations[0] ?? ""].filter(Boolean).join(". ");
+  return ctx ? `${n}. ${ctx}` : n;
+}
+
 /** The brief's concrete concepts — what a quote should PROVE.
  *  Deliberately excludes roles/keywords: quoting the job title back is tautological
  *  ("this Senior PM matches because they're a Senior PM") and the title is already shown
@@ -142,6 +154,7 @@ export async function runSearch(input: string | SearchInput): Promise<SearchResu
     // semantic embeds the full JD; rank/UI use a synthesized role brief (token-cheap, clean)
     query.embedText = embedText;
     query.raw = synthBrief(query, noteT, displayBrief);
+    query.emphasis = emphasisText(query, noteT); // the note becomes a full-weight retrieval angle
     // A result count may ONLY come from the recruiter's own ask. Read from a JD body it matched
     // ordinary prose ("lead a team of 3 people" -> 3) and truncated the shortlist to 3.
     if (hasJd) query.wantCount = extractCount(noteT.toLowerCase());
@@ -235,6 +248,7 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
   try {
     const hq = heuristicQuery(intentText);
     hq.embedText = embedText; // preview runs semantic too, so relevant people show from the start
+    hq.emphasis = emphasisText(hq, noteT); // note steers the preview's semantic retrieval too
     if (hasJd) hq.wantCount = extractCount(noteT.toLowerCase()); // never read a count out of the JD body
     const prelimPeople = dedupe(await supabaseAdapter.search(hq));
     const preRanked = preRank(prelimPeople, hq);
@@ -254,7 +268,9 @@ export async function runSearchProgressive(input: string | SearchInput, emit: (e
     const query = await parseIntent(intentText);
     query.embedText = embedText;
     query.raw = synthBrief(query, noteT, displayBrief);
+    query.emphasis = emphasisText(query, noteT); // the note becomes a full-weight retrieval angle
     if (hasJd) query.wantCount = extractCount(noteT.toLowerCase()); // never read a count out of the JD body
+    query.wantFresh = wantsFresh(noteT || qT);
 
     const dbPeople = dedupe(await supabaseAdapter.search(query));
     let preRanked = preRank(dbPeople, query);
